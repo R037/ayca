@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"ayca/internal/discovery"
+	"github.com/R037/ayca/internal/discovery"
 )
 
 // Kind of tree node.

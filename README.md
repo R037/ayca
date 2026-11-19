@@ -42,7 +42,13 @@ agents, hooks or MCP servers, and makes no network calls.
 Requires Go 1.24.2 or later.
 
 ```sh
-git clone <this repo> ayca && cd ayca
+go install github.com/R037/ayca/cmd/ayca@latest
+```
+
+Or from a clone, which also stamps the version:
+
+```sh
+git clone https://github.com/R037/ayca && cd ayca
 make install            # installs to ~/.local/bin/ayca
 ```
 
@@ -50,8 +56,8 @@ Make sure `~/.local/bin` is on your `PATH`. To install somewhere else, use
 `make install PREFIX=/usr/local`. To build without installing, run
 `make build`; the binary ends up at `./bin/ayca`.
 
-> If you use a version manager such as mise or asdf, avoid plain
-> `go install`. It puts the binary in the toolchain's own directory, and the
+> If you use a version manager such as mise or asdf, prefer `make install`.
+> `go install` puts the binary in the toolchain's own directory, and the
 > shim then only works in projects that use that Go version.
 
 ## Usage
@@ -276,3 +282,7 @@ and register it in `Adapters` in `internal/discovery/adapters.go`. Use
 `c.mcpTOMLFile` and `c.info`. The
 collector handles de-duplication, symlink resolution, scope fixes and
 warnings.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

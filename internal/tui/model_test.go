@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"ayca/internal/discovery"
-	"ayca/internal/preview"
+	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/preview"
 )
 
 func setup(t *testing.T) Model {

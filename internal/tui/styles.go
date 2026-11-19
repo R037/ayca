@@ -3,7 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/lipgloss"
 
-	"ayca/internal/discovery"
+	"github.com/R037/ayca/internal/discovery"
 )
 
 var (

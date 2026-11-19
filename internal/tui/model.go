@@ -12,10 +12,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"ayca/internal/budget"
-	"ayca/internal/discovery"
-	"ayca/internal/preview"
-	"ayca/internal/tree"
+	"github.com/R037/ayca/internal/budget"
+	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/preview"
+	"github.com/R037/ayca/internal/tree"
 )
 
 type focus int

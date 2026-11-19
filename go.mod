@@ -1,4 +1,4 @@
-module ayca
+module github.com/R037/ayca
 
 go 1.24.2
 

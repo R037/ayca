@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ayca/internal/discovery"
+	"github.com/R037/ayca/internal/discovery"
 )
 
 func sampleItems() []discovery.Item {

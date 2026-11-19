@@ -15,7 +15,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/x/ansi"
 
-	"ayca/internal/discovery"
+	"github.com/R037/ayca/internal/discovery"
 )
 
 // MaxBytes caps how much of a file is read for preview.

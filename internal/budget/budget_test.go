@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"ayca/internal/discovery"
+	"github.com/R037/ayca/internal/discovery"
 )
 
 func write(t *testing.T, p, content string) {

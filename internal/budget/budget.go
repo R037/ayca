@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ayca/internal/discovery"
+	"github.com/R037/ayca/internal/discovery"
 )
 
 // DefaultWindows are the context window sizes (in tokens) assumed per agent

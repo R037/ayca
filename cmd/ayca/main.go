@@ -12,11 +12,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"ayca/internal/budget"
-	"ayca/internal/discovery"
-	"ayca/internal/preview"
-	"ayca/internal/tree"
-	"ayca/internal/tui"
+	"github.com/R037/ayca/internal/budget"
+	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/preview"
+	"github.com/R037/ayca/internal/tree"
+	"github.com/R037/ayca/internal/tui"
 )
 
 var version = "0.1.0-dev"
