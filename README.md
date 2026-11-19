@@ -92,20 +92,66 @@ whether it loads at session start, followed by the startup budget per agent.
 The format is versioned (`schema_version`).
 
 The repo includes a skill that uses it to audit your setup and suggest cuts:
-[`skills/prune-context`](skills/prune-context/SKILL.md). To install it, copy
-the folder to `~/.claude/skills/` for Claude Code, or `~/.agents/skills/` for
-Codex:
+[`skills/prune-context`](skills/prune-context/SKILL.md).
+
+#### Install the skill
+
+You need `ayca` v0.2.0 or later on your `PATH` (`ayca --version`), because
+the skill runs `ayca --json`. Then put the skill folder where your agent looks
+for skills:
+
+| Agent | User-wide (all projects) | One project only |
+| --- | --- | --- |
+| Claude Code | `~/.claude/skills/prune-context/` | `<project>/.claude/skills/prune-context/` |
+| Codex | `~/.agents/skills/prune-context/` | |
+
+To keep the skill up to date, link it to a clone of this repo. A `git pull`
+then updates it:
 
 ```sh
-git clone https://github.com/R037/ayca /tmp/ayca
-cp -r /tmp/ayca/skills/prune-context ~/.claude/skills/
+git clone https://github.com/R037/ayca ~/src/ayca
+mkdir -p ~/.claude/skills
+ln -s ~/src/ayca/skills/prune-context ~/.claude/skills/prune-context
 ```
 
-Then ask the agent to "prune my context", or something similar. It runs
-`ayca --json` and looks for unused skills and MCP servers, duplicate
-instructions, bloated files and broken imports. It proposes changes with the
-tokens each one saves, and edits nothing until you approve. AYCA itself stays
-read-only.
+Or take a one-off copy instead:
+
+```sh
+cp -r ~/src/ayca/skills/prune-context ~/.claude/skills/
+```
+
+Agents load skills when a session starts, so open a new session after you
+install it. Other agents that can run shell commands can use the skill too:
+tell them to read `skills/prune-context/SKILL.md` and follow it.
+
+#### Use it
+
+Start a session in the project you want to check and ask, for example:
+
+- "Prune my context."
+- "Why is my startup context so big?"
+- "Find duplicate or stale instructions in my CLAUDE.md and AGENTS.md."
+- "Which of my skills and MCP servers could I drop?"
+
+In Claude Code you can also run it directly with `/prune-context`.
+
+The agent then:
+
+1. Runs `ayca --json` in the project (add "for Codex only" or similar to
+   limit it to one agent).
+2. Reads the largest items that load at startup.
+3. Looks for broken imports, unused skills and MCP servers, instructions
+   duplicated across scopes, bloated files, long skill descriptions and stale
+   memory. It asks you which skills and servers you actually use, because
+   ayca can't see usage.
+4. Proposes cuts in a table: what to remove, trim, merge, move or fix, the
+   tokens each saves, and the risk.
+5. Makes only the changes you approve, preferring reversible ones (archiving
+   instead of deleting), then runs ayca again to show the before and after.
+
+Token counts are estimates (bytes ÷ 4) of files on disk only. The agent's
+built-in prompt and MCP tool definitions aren't included. In Claude Code,
+`/context` shows the real totals. AYCA itself stays read-only.
 
 ### Keyboard shortcuts
 
