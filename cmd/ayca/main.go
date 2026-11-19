@@ -15,6 +15,7 @@ import (
 
 	"github.com/R037/ayca/internal/budget"
 	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/jsonout"
 	"github.com/R037/ayca/internal/preview"
 	"github.com/R037/ayca/internal/tree"
 	"github.com/R037/ayca/internal/tui"
@@ -45,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	agentFlag := fs.String("agent", "", "only show context for these agents, comma-separated: "+strings.Join(discovery.AllAgents, ","))
 	window := fs.String("window", "", "context window size to compare against, e.g. 200k or 1m (default: per agent — claude 200k, codex 272k, cursor 200k)")
 	list := fs.Bool("list", false, "print discovered context as plain text and exit (no TUI)")
+	jsonOut := fs.Bool("json", false, "print discovered context and the startup budget as JSON to stdout and exit (no TUI; for scripts and AI agents; cannot be combined with --list)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "AYCA — All Your Context Are Belong To Us. Know what your agents know.\n\nUsage: ayca [flags]\n\nFlags:\n")
@@ -59,6 +61,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *showVersion {
 		fmt.Fprintln(stdout, "ayca", versionString())
 		return 0
+	}
+
+	if *jsonOut && *list {
+		fmt.Fprintln(stderr, "ayca: --json and --list cannot be used together")
+		return 2
 	}
 
 	agents, err := parseAgents(*agentFlag)
@@ -84,6 +91,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	res := discovery.Discover(env, agents)
+
+	if *jsonOut {
+		doc := jsonout.Build(res, budget.Estimate(res, agents, windows), versionString())
+		if err := jsonout.Write(stdout, doc); err != nil {
+			fmt.Fprintln(stderr, "ayca:", err)
+			return 1
+		}
+		return 0
+	}
 
 	if *list {
 		printList(stdout, res)
