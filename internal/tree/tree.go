@@ -4,6 +4,7 @@ package tree
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"ayca/internal/discovery"
@@ -33,15 +34,22 @@ func (n *Node) HasChildren() bool { return len(n.Children) > 0 }
 
 var categoryLabels = map[discovery.Category]string{
 	discovery.CategoryInstruction: "Instructions",
+	discovery.CategoryMemory:      "Memory",
 	discovery.CategoryRule:        "Rules",
 	discovery.CategorySkill:       "Skills",
+	discovery.CategoryAgent:       "Subagents",
+	discovery.CategoryCommand:     "Commands",
+	discovery.CategoryOutputStyle: "Output styles",
+	discovery.CategoryHook:        "Hooks",
 	discovery.CategoryMCP:         "MCP Servers",
+	discovery.CategoryRuntime:     "Runtime (not on disk)",
 }
 
 var scopeLabels = map[discovery.Scope]string{
 	discovery.ScopeProject:  "Project",
 	discovery.ScopeAncestor: "Ancestor directories",
 	discovery.ScopeGlobal:   "Global",
+	discovery.ScopeSystem:   "System",
 }
 
 // CategoryLabel returns the display label for a category.
@@ -51,8 +59,8 @@ func CategoryLabel(c discovery.Category) string { return categoryLabels[c] }
 func ScopeLabel(s discovery.Scope) string { return scopeLabels[s] }
 
 // Build groups items as Category → Scope → Item, keeping discovery order
-// inside each group. Empty categories are kept so users can see that a
-// category was checked and nothing was found.
+// inside each group. Empty core categories are kept so users can see that
+// they were checked and nothing was found; other empty categories are hidden.
 func Build(items []discovery.Item) []*Node {
 	var roots []*Node
 	for _, cat := range discovery.Categories {
@@ -71,6 +79,9 @@ func Build(items []discovery.Item) []*Node {
 				scNode.Label = fmt.Sprintf("%s (%d)", scNode.Label, len(scNode.Children))
 				catNode.Children = append(catNode.Children, scNode)
 			}
+		}
+		if count == 0 && !slices.Contains(discovery.CoreCategories, cat) {
+			continue
 		}
 		catNode.Label = fmt.Sprintf("%s (%d)", categoryLabels[cat], count)
 		roots = append(roots, catNode)

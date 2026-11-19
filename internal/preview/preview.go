@@ -62,15 +62,25 @@ var codeLangs = map[string]string{
 // Load reads the content to preview for it.
 func Load(it *discovery.Item) Content {
 	switch {
+	case it.Info != "":
+		return Content{Text: it.Info, Format: FormatMarkdown, Size: -1}
+	case it.Missing:
+		return Content{SourcePath: it.Path, Size: -1,
+			Note: "This file is referenced with `" + it.Name + "` but does not exist, so nothing is imported."}
 	case it.Virtual:
 		data, _ := json.MarshalIndent(it.Config, "", "  ")
-		return Content{SourcePath: it.Path, Text: string(data), Format: FormatCode, Lang: "json", Size: -1,
-			Note: "MCP server `" + it.Name + "` as configured in this file. Values that look like secrets are masked."}
+		note := "MCP server `" + it.Name + "` as configured in this file. Values that look like secrets are masked."
+		if it.Category == discovery.CategoryHook {
+			note = "Hook as configured in this file. AYCA never runs hooks; scripts it references are listed below it in the tree. Values that look like secrets are masked."
+		}
+		return Content{SourcePath: it.Path, Text: string(data), Format: FormatCode, Lang: "json", Size: -1, Note: note}
 	case it.IsDir:
-		if it.Category == discovery.CategorySkill {
-			skill := filepath.Join(it.Path, "SKILL.md")
-			if _, err := os.Stat(skill); err == nil {
-				return loadFile(skill)
+		// Folders whose meaning lives in one entry file preview that file.
+		entry := map[discovery.Category]string{discovery.CategorySkill: "SKILL.md", discovery.CategoryMemory: "MEMORY.md"}[it.Category]
+		if entry != "" {
+			p := filepath.Join(it.Path, entry)
+			if _, err := os.Stat(p); err == nil {
+				return loadFile(p)
 			}
 		}
 		return Content{SourcePath: it.Path, Text: listing(it), Format: FormatMarkdown, Size: -1}

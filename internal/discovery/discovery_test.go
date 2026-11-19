@@ -57,7 +57,20 @@ func (f *fixture) symlink(target, link string) {
 }
 
 func (f *fixture) env(cwd string) Env {
-	return NewEnvWith(cwd, f.home, func(string) string { return "" })
+	e := NewEnvWith(cwd, f.home, func(string) string { return "" })
+	e.ManagedDir = filepath.Join(f.root, "etc", "claude-code") // never the real /etc
+	return e
+}
+
+// onDisk drops the always-present runtime (not-on-disk) entries.
+func onDisk(items []Item) []Item {
+	var out []Item
+	for _, it := range items {
+		if it.Category != CategoryRuntime {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 func (f *fixture) discover(cwd string, agents ...string) Result {
@@ -374,12 +387,13 @@ env = { API_KEY = "sk-1234567890abcdef" }
 func TestEmptyEnvironment(t *testing.T) {
 	f := newFixture(t)
 	res := f.discover(f.proj)
-	if len(res.Items) != 0 || len(res.Warnings) != 0 {
+	if len(onDisk(res.Items)) != 0 || len(res.Warnings) != 0 {
 		t.Fatalf("expected nothing, got %d items, warnings %v", len(res.Items), res.Warnings)
 	}
 	// Home directory that doesn't exist at all.
 	e := NewEnvWith(f.proj, filepath.Join(f.root, "nope"), func(string) string { return "" })
-	if res := Discover(e, nil); len(res.Items) != 0 || len(res.Warnings) != 0 {
+	e.ManagedDir = filepath.Join(f.root, "nope-etc")
+	if res := Discover(e, nil); len(onDisk(res.Items)) != 0 || len(res.Warnings) != 0 {
 		t.Fatalf("missing home: %+v", res)
 	}
 }
@@ -414,8 +428,9 @@ func TestAgentFilter(t *testing.T) {
 	f.write(filepath.Join(f.proj, "web", "CLAUDE.md"), "nested c")
 
 	res := f.discover(f.proj, AgentCursor)
-	if len(res.Items) != 1 || res.Items[0].Path != agents || !reflect.DeepEqual(res.Items[0].Agents, []string{"cursor"}) {
-		t.Fatalf("cursor-only: %+v", res.Items)
+	items := onDisk(res.Items)
+	if len(items) != 1 || items[0].Path != agents || !reflect.DeepEqual(items[0].Agents, []string{"cursor"}) {
+		t.Fatalf("cursor-only: %+v", items)
 	}
 }
 

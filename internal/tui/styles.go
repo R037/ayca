@@ -15,6 +15,7 @@ var (
 	colProject  = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#7EE787"}
 	colAncestor = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#E3B341"}
 	colGlobal   = lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#79C0FF"}
+	colSystem   = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#FF7B72"}
 	colWarn     = lipgloss.AdaptiveColor{Light: "#BC4C00", Dark: "#FFA657"}
 
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
@@ -34,6 +35,8 @@ func scopeColor(s discovery.Scope) lipgloss.AdaptiveColor {
 		return colProject
 	case discovery.ScopeAncestor:
 		return colAncestor
+	case discovery.ScopeSystem:
+		return colSystem
 	default:
 		return colGlobal
 	}
@@ -49,4 +52,16 @@ func paneStyle(focused bool) lipgloss.Style {
 		c = colFocus
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(c)
+}
+
+// budgetStyle colours a context-window percentage: fine, notable, heavy.
+func budgetStyle(pct float64) lipgloss.Style {
+	switch {
+	case pct >= 20:
+		return lipgloss.NewStyle().Foreground(colSystem).Bold(true)
+	case pct >= 5:
+		return lipgloss.NewStyle().Foreground(colWarn)
+	default:
+		return lipgloss.NewStyle().Foreground(colProject)
+	}
 }

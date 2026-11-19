@@ -23,6 +23,17 @@ type collector struct {
 	index    map[string]int
 	warnings []Warning
 	warned   map[string]bool
+	// deferred makes every item added while it is set Deferred.
+	deferred    bool
+	outputStyle string
+}
+
+// deferring runs fn with every item it adds marked Deferred.
+func (c *collector) deferring(fn func()) {
+	prev := c.deferred
+	c.deferred = true
+	fn()
+	c.deferred = prev
 }
 
 func newCollector(env Env) *collector {
@@ -66,7 +77,12 @@ func (c *collector) add(it Item) {
 	real := realPath(it.Path)
 	key := real
 	if it.Virtual {
+		// A preset ID acts as an extra discriminator (e.g. two identical
+		// hooks in one file).
 		key = real + "#" + string(it.Category) + ":" + it.Name
+		if it.ID != "" {
+			key += "#" + it.ID
+		}
 	}
 	if real != filepath.Clean(it.Path) {
 		it.Target = real
@@ -79,10 +95,23 @@ func (c *collector) add(it Item) {
 		it.Scope = ScopeGlobal
 	}
 	it.ID = key
+	if c.deferred {
+		it.DeferredFor = slices.Clone(it.Agents)
+	}
+	assignChildIDs(key, it.Children)
 	if i, ok := c.index[key]; ok {
 		ex := &c.items[i]
+		// An agent loads it at startup if any location that found it for
+		// that agent does.
 		for _, a := range it.Agents {
-			if !slices.Contains(ex.Agents, a) {
+			known := slices.Contains(ex.Agents, a)
+			switch {
+			case !it.Deferred(a):
+				ex.DeferredFor = slices.DeleteFunc(ex.DeferredFor, func(x string) bool { return x == a })
+			case !known && !ex.Deferred(a):
+				ex.DeferredFor = append(ex.DeferredFor, a)
+			}
+			if !known {
 				ex.Agents = append(ex.Agents, a)
 			}
 		}
@@ -111,6 +140,16 @@ func sortAgents(a []string) {
 	sort.SliceStable(a, func(i, j int) bool { return order(a[i]) < order(a[j]) })
 }
 
+// assignChildIDs gives children without an ID one derived from their parent.
+func assignChildIDs(parent string, items []Item) {
+	for i := range items {
+		if items[i].ID == "" {
+			items[i].ID = parent + "/" + items[i].Name
+		}
+		assignChildIDs(items[i].ID, items[i].Children)
+	}
+}
+
 // file adds a regular file if it exists.
 func (c *collector) file(path string, cat Category, scope Scope, note string, agents ...string) bool {
 	fi, ok := c.stat(path)
@@ -128,25 +167,34 @@ func (c *collector) file(path string, cat Category, scope Scope, note string, ag
 	return true
 }
 
-// ruleDir adds dir as a group containing every file (recursively) whose
-// extension is in exts. Nothing is added when no matching files exist.
+// ruleDir adds a directory of rule files (see fileDir).
 func (c *collector) ruleDir(dir string, exts []string, scope Scope, note string, agents ...string) {
+	c.fileDir(dir, "", CategoryRule, exts, scope, note, agents...)
+}
+
+// fileDir adds dir as a group containing every file (recursively) whose
+// extension is in exts. Nothing is added when no matching files exist.
+// name overrides the displayed name (default: the directory's path).
+func (c *collector) fileDir(dir, name string, cat Category, exts []string, scope Scope, note string, agents ...string) {
 	fi, ok := c.stat(dir)
 	if !ok || !fi.IsDir() {
 		return
 	}
 	parentID := realPath(dir)
-	children := c.listDir(dir, parentID, CategoryRule, scope, agents, func(name string) bool {
+	children := c.listDir(dir, parentID, cat, scope, agents, func(name string) bool {
 		return slices.Contains(exts, strings.ToLower(filepath.Ext(name)))
 	}, 0)
 	children = pruneEmptyDirs(children)
 	if len(children) == 0 {
 		return
 	}
+	if name == "" {
+		name = c.env.DisplayPath(dir) + "/"
+	}
 	c.add(Item{
-		Name:     c.env.DisplayPath(dir) + "/",
+		Name:     name,
 		Path:     dir,
-		Category: CategoryRule,
+		Category: cat,
 		Scope:    scope,
 		Agents:   agents,
 		IsDir:    true,

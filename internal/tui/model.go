@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"ayca/internal/budget"
 	"ayca/internal/discovery"
 	"ayca/internal/preview"
 	"ayca/internal/tree"
@@ -26,10 +27,21 @@ const (
 
 type scanDoneMsg discovery.Result
 
+// panel is a full-pane view that replaces the selected item's preview.
+type panel string
+
+const (
+	panelNone     panel = ""
+	panelWarnings panel = "warnings"
+	panelBudget   panel = "budget"
+)
+
 // Model is the root Bubble Tea model.
 type Model struct {
-	env    discovery.Env
-	agents []string
+	env     discovery.Env
+	agents  []string
+	windows map[string]int
+	budget  budget.Report
 
 	res   discovery.Result
 	roots []*tree.Node
@@ -42,9 +54,9 @@ type Model struct {
 	filter    textinput.Model
 	filtering bool
 
-	raw          bool
-	showWarnings bool
-	scanning     bool
+	raw      bool
+	panel    panel
+	scanning bool
 
 	vp        viewport.Model
 	renderer  *preview.Renderer
@@ -55,14 +67,16 @@ type Model struct {
 	width, height int
 }
 
-// New creates the model from an initial discovery result.
-func New(res discovery.Result, agents []string, renderer *preview.Renderer) Model {
+// New creates the model from an initial discovery result. windows overrides
+// the assumed context window size per agent (nil uses the defaults).
+func New(res discovery.Result, agents []string, windows map[string]int, renderer *preview.Renderer) Model {
 	ti := textinput.New()
 	ti.Prompt = "/ "
 	ti.Placeholder = "filter by name or path"
 	m := Model{
 		env:      res.Env,
 		agents:   agents,
+		windows:  windows,
 		state:    tree.NewState(),
 		filter:   ti,
 		vp:       viewport.New(0, 0),
@@ -78,6 +92,7 @@ func (m *Model) setResult(res discovery.Result) {
 		keepID = n.ID
 	}
 	m.res = res
+	m.budget = budget.Estimate(res, m.agents, m.windows)
 	m.roots = tree.Build(res.Items)
 	m.contents = map[string]preview.Content{}
 	m.rendered = map[string]string{}
@@ -161,9 +176,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncPreview()
 			return m, nil
 		case "w":
-			m.showWarnings = !m.showWarnings
-			m.previewID = ""
-			m.syncPreview()
+			m.togglePanel(panelWarnings)
+			return m, nil
+		case "c":
+			m.togglePanel(panelBudget)
 			return m, nil
 		case "/":
 			m.filtering = true
@@ -348,13 +364,23 @@ func (m *Model) layout() {
 
 // ---------------------------------------------------------------- preview
 
+func (m *Model) togglePanel(p panel) {
+	if m.panel == p {
+		m.panel = panelNone
+	} else {
+		m.panel = p
+	}
+	m.previewID = ""
+	m.syncPreview()
+}
+
 func (m *Model) syncPreview() {
 	if m.width == 0 {
 		return
 	}
 	id := "none"
-	if m.showWarnings {
-		id = "warnings"
+	if m.panel != panelNone {
+		id = "panel:" + string(m.panel)
 	} else if n := m.selected(); n != nil {
 		id = n.ID
 	}
@@ -384,8 +410,11 @@ func (m *Model) content(it *discovery.Item) preview.Content {
 
 func (m *Model) renderPreview() string {
 	w := m.vp.Width - 1
-	if m.showWarnings {
+	switch m.panel {
+	case panelWarnings:
 		return m.renderer.Render(preview.Content{Text: m.warningsMarkdown(), Format: preview.FormatMarkdown}, w, false)
+	case panelBudget:
+		return m.renderer.Render(preview.Content{Text: m.budgetMarkdown(), Format: preview.FormatMarkdown}, w, false)
 	}
 	n := m.selected()
 	if n == nil {
@@ -400,7 +429,7 @@ func (m *Model) renderPreview() string {
 // metaLines describe the selected item: path, size, category, scope, agents.
 func (m *Model) metaLines() []string {
 	n := m.selected()
-	if m.showWarnings || n == nil || n.Item == nil {
+	if m.panel != panelNone || n == nil || n.Item == nil {
 		return nil
 	}
 	it := n.Item
@@ -418,7 +447,9 @@ func (m *Model) metaLines() []string {
 	if c.SourcePath != "" && c.SourcePath != it.Path {
 		path = c.SourcePath
 	}
-	lines = append(lines, pathField("Path", path))
+	if path != "" {
+		lines = append(lines, pathField("Path", path))
+	}
 	if it.Target != "" {
 		lines = append(lines, pathField("Links to", it.Target))
 	}
@@ -433,18 +464,25 @@ func (m *Model) metaLines() []string {
 	if t := c.Tokens(); t > 0 {
 		details = append(details, fmt.Sprintf("~%s tokens (est.)", humanCount(t)))
 	}
-	mode := "rendered"
-	if m.raw {
-		mode = "raw"
+	if it.Info == "" && !it.Missing {
+		mode := "rendered"
+		if m.raw {
+			mode = "raw"
+		}
+		details = append(details, mode+" view")
+		lines = append(lines, field("File", strings.Join(details, " · ")))
 	}
-	details = append(details, mode+" view")
-	lines = append(lines, field("File", strings.Join(details, " · ")))
 
 	src := fmt.Sprintf("%s · %s", tree.CategoryLabel(it.Category), scopeStyle(it.Scope).Render(string(it.Scope)))
 	if len(it.Agents) > 0 {
 		src += " · " + strings.Join(it.Agents, ", ")
 	}
 	lines = append(lines, field("Source", src))
+	if en, ok := m.budget.ByID[it.ID]; ok {
+		lines = append(lines, field("Startup", fmt.Sprintf("~%s tokens in context at session start (%s)", budget.Human(en.Tokens), en.How)))
+	} else if it.DeferredForAll() {
+		lines = append(lines, field("Startup", "not loaded at session start"))
+	}
 	if it.Note != "" {
 		lines = append(lines, field("Note", it.Note))
 	}
@@ -472,6 +510,9 @@ func (m Model) headerView() string {
 		info += mutedStyle.Render("  cwd: ") + m.env.Tilde(m.env.Cwd)
 	}
 	info += mutedStyle.Render(fmt.Sprintf("  ·  %d items", len(m.res.Items)))
+	if s := m.budgetSummary(); s != "" {
+		info += mutedStyle.Render("  ·  startup context on disk: ") + s + mutedStyle.Render(" (c)")
+	}
 	if len(m.agents) > 0 {
 		info += mutedStyle.Render("  ·  agents: " + strings.Join(m.agents, ","))
 	}
@@ -549,10 +590,20 @@ func (m Model) rowView(r tree.Row, selected bool, width int) string {
 			badge += fmt.Sprintf(" ⇆%d", len(it.Aliases))
 		}
 		label := n.Label
+		switch {
+		case it.Missing:
+			icon = "✗ "
+			badge = " missing"
+		case it.Info != "":
+			icon = "◇ "
+		}
 		plain = indent + r.Prefix + icon + label + badge
 		lbl := label
 		if r.Match {
 			lbl = matchStyle.Render(label)
+		}
+		if it.Missing {
+			lbl = warnStyle.Render(label)
 		}
 		styled = indent + mutedStyle.Render(r.Prefix) + scopeStyle(it.Scope).Render(icon) + lbl + mutedStyle.Render(badge)
 	}
@@ -567,7 +618,7 @@ func (m Model) footerView() string {
 		return m.filter.View()
 	}
 	keys := [][2]string{{"↑↓/jk", "navigate"}, {"←→/hl", "collapse/expand"}, {"enter", "view"}, {"tab", "switch pane"},
-		{"/", "search"}, {"v", "raw/rendered"}, {"r", "rescan"}, {"q", "quit"}}
+		{"/", "search"}, {"v", "raw/rendered"}, {"c", "context budget"}, {"r", "rescan"}, {"q", "quit"}}
 	if m.focus == focusPreview {
 		keys = [][2]string{{"↑↓/jk", "scroll"}, {"pgup/pgdn", "page"}, {"g/G", "top/bottom"}, {"esc/tab", "back to tree"},
 			{"v", "raw/rendered"}, {"q", "quit"}}
@@ -589,7 +640,13 @@ const emptyMarkdown = "# Nothing selected\n\nNo context was discovered for this 
 const honesty = "\n\n---\n_AYCA shows what is configured on disk. It cannot verify what an agent actually loaded at runtime._"
 
 var categoryHelp = map[discovery.Category]string{
-	discovery.CategoryInstruction: "Instruction files such as `CLAUDE.md` and `AGENTS.md` give agents standing guidance: architecture notes, conventions, commands. Agents typically load them at session start (nested ones on demand).",
+	discovery.CategoryInstruction: "Instruction files such as `CLAUDE.md` and `AGENTS.md` give agents standing guidance: architecture notes, conventions, commands. Agents typically load them at session start (nested ones on demand). Files pulled in by `@path` imports in CLAUDE.md appear beneath the file that imports them.",
+	discovery.CategoryMemory:      "Notes Claude Code keeps for this project (auto memory). `MEMORY.md` is loaded into every session; the topic files it points to are read when needed.",
+	discovery.CategoryAgent:       "Subagent definitions. Their names and descriptions are in context so the main agent can delegate; each subagent's own prompt is used only when it runs.",
+	discovery.CategoryCommand:     "Slash commands and custom prompts. Their text is sent to the agent only when you invoke one, though names and descriptions may be listed up front.",
+	discovery.CategoryOutputStyle: "Output styles change Claude Code's system prompt. Only the active style (set by `outputStyle` in settings) applies.",
+	discovery.CategoryHook:        "Hooks are commands that run on agent events. SessionStart and UserPromptSubmit hooks can add their output straight into the context; others can block actions or send feedback. AYCA lists them and the scripts they run. It never runs them.",
+	discovery.CategoryRuntime:     "Context that exists in a session but has no file AYCA can read: built-in system prompts, the session environment, account-level connectors, launch flags and hook output. These entries explain what's there and where to look.",
 	discovery.CategoryRule:        "Rules are scoped or conditional instructions: Cursor `.cursor/rules/*.mdc`, Claude Code `.claude/rules/*.md`, and Codex execution-policy `.rules` files.",
 	discovery.CategorySkill:       "Skills are folders with a `SKILL.md`. Agents usually see only each skill's name and description up front and load the full content when the skill is used.",
 	discovery.CategoryMCP:         "MCP servers give agents extra tools. Each entry is read from a configuration file; values that look like secrets are masked.",
@@ -613,6 +670,8 @@ func (m Model) groupMarkdown(n *tree.Node) string {
 			b.WriteString("Directories above the project root. Some agents (e.g. Claude Code) read instruction files all the way up to `/`.\n")
 		case discovery.ScopeGlobal:
 			b.WriteString("User-wide configuration that applies to every project.\n")
+		case discovery.ScopeSystem:
+			b.WriteString("Machine-wide context: administrator-managed policy files that apply to every user and can't be overridden, plus context built into the agents themselves.\n")
 		}
 		b.WriteString("\n")
 		for _, c := range n.Children {
@@ -624,6 +683,58 @@ func (m Model) groupMarkdown(n *tree.Node) string {
 		}
 	}
 	b.WriteString(honesty)
+	return b.String()
+}
+
+// budgetSummary is the header's per-agent percentage, e.g.
+// "claude 3.1% · codex 0.8%". Agents with nothing counted are left out.
+func (m Model) budgetSummary() string {
+	var parts []string
+	for _, a := range m.budget.Agents {
+		if a.Tokens == 0 {
+			continue
+		}
+		parts = append(parts, a.Agent+" "+budgetStyle(a.Percent()).Render(fmt.Sprintf("%s%%", pct(a.Percent()))))
+	}
+	return strings.Join(parts, mutedStyle.Render(" · "))
+}
+
+func pct(p float64) string {
+	if p > 0 && p < 0.1 {
+		return "<0.1"
+	}
+	return fmt.Sprintf("%.1f", p)
+}
+
+func (m Model) budgetMarkdown() string {
+	var b strings.Builder
+	b.WriteString("# Startup context\n\nHow much of each agent's context window the context on disk fills before you type anything. Press `c` to return.\n")
+	for _, a := range m.budget.Agents {
+		fmt.Fprintf(&b, "\n## %s — ~%s tokens · %s%% of %s\n\n", a.Agent, budget.Human(a.Tokens), pct(a.Percent()), budget.Human(a.Window))
+		if len(a.Entries) == 0 {
+			b.WriteString("_Nothing on disk counts at startup._\n")
+		} else {
+			b.WriteString("| Category | Items | Tokens | Window |\n| --- | ---: | ---: | ---: |\n")
+			for _, st := range a.ByCategory() {
+				fmt.Fprintf(&b, "| %s | %d | %s | %s%% |\n", tree.CategoryLabel(st.Category), st.Count, budget.Human(st.Tokens),
+					pct(float64(st.Tokens)*100/float64(max(a.Window, 1))))
+			}
+			b.WriteString("\n| Tokens | Item | Counted as |\n| ---: | --- | --- |\n")
+			for _, e := range a.Entries {
+				fmt.Fprintf(&b, "| %s | `%s` | %s |\n", budget.Human(e.Tokens), strings.ReplaceAll(e.Name, "|", "\\|"), e.How)
+			}
+		}
+		for _, n := range a.Notes {
+			fmt.Fprintf(&b, "\n%s\n", n)
+		}
+		if len(a.NotCounted) > 0 {
+			b.WriteString("\n**Not counted:** " + strings.Join(a.NotCounted, "; ") + ".\n")
+		}
+	}
+	b.WriteString(`
+---
+_Estimates: tokens ≈ bytes ÷ 4, and only what's on disk. Nested files, shadowed files and disabled plugins are left out because they don't load at session start. Skills, subagents and commands count only their name and description. The window sizes are typical defaults and depend on the model: set yours with ` + "`--window`" + `. For the real numbers, run ` + "`/context`" + ` inside Claude Code._
+`)
 	return b.String()
 }
 

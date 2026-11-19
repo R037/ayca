@@ -60,6 +60,9 @@ func TestMaskSecrets(t *testing.T) {
 			t.Errorf("%s:\n got  %#v\n want %#v", k, got[k], want[k])
 		}
 	}
+	if got := MaskSecrets(map[string]any{"command": "run --x sk-abcdefghijklmnopqrstu now"}).(map[string]any)["command"]; got != "run --x "+Masked+" now" {
+		t.Errorf("inline secret not masked: %v", got)
+	}
 	// Input must be untouched.
 	if in["env"].(map[string]any)["PLAIN_VAL"] != "abc" {
 		t.Error("MaskSecrets mutated its input")

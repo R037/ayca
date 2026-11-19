@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -18,6 +19,19 @@ type Env struct {
 	CodexHome   string // $CODEX_HOME or ~/.codex
 	CursorDir   string // ~/.cursor
 	AgentsDir   string // ~/.agents (shared skills location used by Codex)
+	ManagedDir  string // Claude Code managed policy directory (system-wide)
+}
+
+// managedDir is where Claude Code reads administrator-managed policy files.
+func managedDir() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "/Library/Application Support/ClaudeCode"
+	case "windows":
+		return `C:\Program Files\ClaudeCode`
+	default:
+		return "/etc/claude-code"
+	}
 }
 
 // NewEnv builds an Env for the given start path using the real user home and
@@ -56,6 +70,7 @@ func NewEnvWith(cwd, home string, getenv func(string) string) Env {
 		CodexHome:   filepath.Join(home, ".codex"),
 		CursorDir:   filepath.Join(home, ".cursor"),
 		AgentsDir:   filepath.Join(home, ".agents"),
+		ManagedDir:  managedDir(),
 	}
 	if v := getenv("CLAUDE_CONFIG_DIR"); v != "" {
 		e.ClaudeDir = v

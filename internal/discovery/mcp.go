@@ -78,6 +78,8 @@ func (c *collector) readJSON(path string) (map[string]any, bool) {
 var (
 	sensitiveKey = regexp.MustCompile(`(?i)(token|secret|passw(or)?d|api[-_]?key|apikey|auth|credential|private[-_]?key|cookie|session)`)
 	secretValue  = regexp.MustCompile(`(?i)^(bearer\s+\S+|basic\s+\S+|sk-[a-z0-9_-]{8,}|sk_(live|test)_\S+|gh[pousr]_[a-z0-9]{16,}|github_pat_\S+|xox[abpors]-\S+|AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{20,}|glpat-\S+|eyJ[a-z0-9_-]{10,}\.[a-z0-9_-]+\.\S*)$`)
+	// The same token formats, found inside a longer string (e.g. a command line).
+	secretInline = regexp.MustCompile(`(?i)\b(bearer\s+[A-Za-z0-9._~+/=-]{8,}|sk-[A-Za-z0-9_-]{16,}|sk_(live|test)_[A-Za-z0-9]+|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]+|xox[abpors]-[A-Za-z0-9-]+|AKIA[0-9A-Z]{12,}|AIza[0-9A-Za-z_-]{20,}|glpat-[A-Za-z0-9_-]+)`)
 	envRef       = regexp.MustCompile(`^\$\{?(env:)?[A-Za-z_][A-Za-z0-9_]*\}?$`)
 	// Query parameters often use short names for credentials (?key=, ?sig=).
 	sensitiveQuery = regexp.MustCompile(`(?i)^(key|sig|signature|code|pass|pw)$`)
@@ -140,9 +142,9 @@ func maskString(s, key string, all bool) string {
 		return Masked
 	}
 	if strings.Contains(s, "://") {
-		return maskURL(s)
+		s = maskURL(s)
 	}
-	return s
+	return secretInline.ReplaceAllString(s, Masked)
 }
 
 func maskArg(args []any, i int, a any) any {

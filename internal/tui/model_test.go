@@ -27,7 +27,7 @@ func setup(t *testing.T) Model {
 		os.WriteFile(p, []byte(s), 0o644)
 	}
 	env := discovery.NewEnvWith(proj, home, func(string) string { return "" })
-	m := New(discovery.Discover(env, nil), nil, preview.NewRendererStyle("dark"))
+	m := New(discovery.Discover(env, nil), nil, nil, preview.NewRendererStyle("dark"))
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	return next.(Model)
 }
@@ -134,5 +134,23 @@ func TestBatchedRunesStartSearch(t *testing.T) {
 	m = next.(Model)
 	if !m.filtering || m.filter.Value() != "pdf" {
 		t.Fatalf("filtering=%v value=%q", m.filtering, m.filter.Value())
+	}
+}
+
+func TestBudgetPanel(t *testing.T) {
+	m := setup(t)
+	if !strings.Contains(ansi.Strip(m.View()), "startup context on disk: claude") {
+		t.Error("header should show the startup context percentage")
+	}
+	m = press(m, "c")
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"Startup context", "of 200k", "Not counted"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("budget panel missing %q", want)
+		}
+	}
+	m = press(m, "c")
+	if strings.Contains(ansi.Strip(m.View()), "Not counted") {
+		t.Error("c should toggle the panel off")
 	}
 }
