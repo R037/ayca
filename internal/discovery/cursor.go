@@ -4,24 +4,38 @@ import "path/filepath"
 
 func discoverCursor(c *collector) {
 	e := c.env
-	c.file(filepath.Join(e.ProjectRoot, "AGENTS.md"), CategoryInstruction, ScopeProject, "", AgentCursor)
-	c.file(filepath.Join(e.ProjectRoot, ".cursorrules"), CategoryRule, ScopeProject, "legacy rules file", AgentCursor)
+	c.via(MechDirInstructions, func() {
+		c.file(filepath.Join(e.ProjectRoot, "AGENTS.md"), CategoryInstruction, ScopeProject, "", AgentCursor)
+	})
+	c.via(MechLegacyRules, func() {
+		c.file(filepath.Join(e.ProjectRoot, ".cursorrules"), CategoryRule, ScopeProject, "legacy rules file", AgentCursor)
+	})
 	for _, d := range e.ProjectDirs() {
-		c.ruleDir(filepath.Join(d, ".cursor", "rules"), []string{".mdc", ".md"}, ScopeProject, "", AgentCursor)
-		c.skills(filepath.Join(d, ".cursor", "skills"), ScopeProject, "", AgentCursor)
+		c.via(MechProjectRules, func() {
+			c.ruleDir(filepath.Join(d, ".cursor", "rules"), []string{".mdc", ".md"}, ScopeProject, "", AgentCursor)
+		})
+		c.via(MechProjectSkills, func() { c.skills(filepath.Join(d, ".cursor", "skills"), ScopeProject, "", AgentCursor) })
 	}
-	c.skills(filepath.Join(e.CursorDir, "skills"), ScopeGlobal, "", AgentCursor)
+	c.via(MechUserSkills, func() { c.skills(filepath.Join(e.CursorDir, "skills"), ScopeGlobal, "", AgentCursor) })
 
-	c.fileDir(filepath.Join(e.ProjectRoot, ".cursor", "commands"), "", CategoryCommand, mdExts, ScopeProject, "", AgentCursor)
-	c.fileDir(filepath.Join(e.CursorDir, "commands"), "", CategoryCommand, mdExts, ScopeGlobal, "", AgentCursor)
+	c.via(MechProjectCommands, func() {
+		c.fileDir(filepath.Join(e.ProjectRoot, ".cursor", "commands"), "", CategoryCommand, mdExts, ScopeProject, "", AgentCursor)
+	})
+	c.via(MechUserCommands, func() {
+		c.fileDir(filepath.Join(e.CursorDir, "commands"), "", CategoryCommand, mdExts, ScopeGlobal, "", AgentCursor)
+	})
 
-	c.hooksFile(filepath.Join(e.ProjectRoot, ".cursor", "hooks.json"), ScopeProject, "", "", AgentCursor)
-	c.hooksFile(filepath.Join(e.CursorDir, "hooks.json"), ScopeGlobal, "", "", AgentCursor)
+	c.via(MechProjectHooks, func() {
+		c.hooksFile(filepath.Join(e.ProjectRoot, ".cursor", "hooks.json"), ScopeProject, "", "", AgentCursor)
+	})
+	c.via(MechUserHooks, func() { c.hooksFile(filepath.Join(e.CursorDir, "hooks.json"), ScopeGlobal, "", "", AgentCursor) })
 
-	c.mcpJSONFile(filepath.Join(e.ProjectRoot, ".cursor", "mcp.json"), ScopeProject, "", AgentCursor)
-	c.mcpJSONFile(filepath.Join(e.CursorDir, "mcp.json"), ScopeGlobal, "", AgentCursor)
+	c.via(MechProjectMCP, func() {
+		c.mcpJSONFile(filepath.Join(e.ProjectRoot, ".cursor", "mcp.json"), ScopeProject, "", AgentCursor)
+	})
+	c.via(MechUserMCP, func() { c.mcpJSONFile(filepath.Join(e.CursorDir, "mcp.json"), ScopeGlobal, "", AgentCursor) })
 
-	c.info("Cursor system prompt & User Rules", cursorInfo, AgentCursor)
+	c.info(MechAppSettings, "Cursor system prompt & User Rules", cursorInfo, AgentCursor)
 }
 
 const cursorInfo = `# Cursor system prompt & User Rules

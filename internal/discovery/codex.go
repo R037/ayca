@@ -5,43 +5,54 @@ import "path/filepath"
 func discoverCodex(c *collector) {
 	e := c.env
 	// AGENTS.override.md takes precedence over AGENTS.md in the same directory.
-	agentsFiles := func(dir string, scope Scope, note string) {
+	agentsFiles := func(m Mechanism, dir string, scope Scope, note string) {
 		override := filepath.Join(dir, "AGENTS.override.md")
-		hasOverride := c.file(override, CategoryInstruction, scope, joinNote(note, "overrides AGENTS.md"), AgentCodex)
-		if hasOverride {
-			c.deferring(func() {
-				c.file(filepath.Join(dir, "AGENTS.md"), CategoryInstruction, scope, joinNote(note, "shadowed by AGENTS.override.md"), AgentCodex)
-			})
-			return
-		}
-		c.file(filepath.Join(dir, "AGENTS.md"), CategoryInstruction, scope, note, AgentCodex)
+		var hasOverride bool
+		c.via(m, func() {
+			hasOverride = c.file(override, CategoryInstruction, scope, joinNote(note, "overrides AGENTS.md"), AgentCodex)
+			if hasOverride {
+				c.shadowed(override, func() {
+					c.deferring(func() {
+						c.file(filepath.Join(dir, "AGENTS.md"), CategoryInstruction, scope, joinNote(note, "shadowed by AGENTS.override.md"), AgentCodex)
+					})
+				})
+				return
+			}
+			c.file(filepath.Join(dir, "AGENTS.md"), CategoryInstruction, scope, note, AgentCodex)
+		})
 	}
-	agentsFiles(e.CodexHome, ScopeGlobal, "")
+	agentsFiles(MechUserInstructions, e.CodexHome, ScopeGlobal, "")
 	for _, d := range e.ProjectDirs() {
-		agentsFiles(d, ScopeProject, "")
+		agentsFiles(MechDirInstructions, d, ScopeProject, "")
 	}
 	c.deferring(func() {
 		for _, d := range e.AncestorDirs() {
-			agentsFiles(d, ScopeAncestor, "above the project root — Codex reads AGENTS.md from the project root down, so this is likely not loaded")
+			agentsFiles(MechDirInstructions, d, ScopeAncestor, "above the project root — Codex reads AGENTS.md from the project root down, so this is likely not loaded")
 		}
 	})
 
-	c.ruleDir(filepath.Join(e.CodexHome, "rules"), []string{".rules"}, ScopeGlobal, "execution policy rules", AgentCodex)
+	c.via(MechExecPolicy, func() {
+		c.ruleDir(filepath.Join(e.CodexHome, "rules"), []string{".rules"}, ScopeGlobal, "execution policy rules", AgentCodex)
+	})
 
 	for _, d := range e.ProjectDirs() {
-		c.skills(filepath.Join(d, ".agents", "skills"), ScopeProject, "", AgentCodex)
-		c.skills(filepath.Join(d, ".codex", "skills"), ScopeProject, "", AgentCodex)
+		c.via(MechProjectSkills, func() { c.skills(filepath.Join(d, ".agents", "skills"), ScopeProject, "", AgentCodex) })
+		c.via(MechProjectSkills, func() { c.skills(filepath.Join(d, ".codex", "skills"), ScopeProject, "", AgentCodex) })
 	}
-	c.skills(filepath.Join(e.AgentsDir, "skills"), ScopeGlobal, "", AgentCodex)
-	c.skills(filepath.Join(e.CodexHome, "skills"), ScopeGlobal, "", AgentCodex)
+	c.via(MechSharedSkills, func() { c.skills(filepath.Join(e.AgentsDir, "skills"), ScopeGlobal, "", AgentCodex) })
+	c.via(MechUserSkills, func() { c.skills(filepath.Join(e.CodexHome, "skills"), ScopeGlobal, "", AgentCodex) })
 
-	c.fileDir(filepath.Join(e.CodexHome, "prompts"), "", CategoryCommand, mdExts, ScopeGlobal, "custom prompts (/prompts:<name>)", AgentCodex)
-	c.hooksFile(filepath.Join(e.CodexHome, "hooks.json"), ScopeGlobal, "", "", AgentCodex)
+	c.via(MechUserCommands, func() {
+		c.fileDir(filepath.Join(e.CodexHome, "prompts"), "", CategoryCommand, mdExts, ScopeGlobal, "custom prompts (/prompts:<name>)", AgentCodex)
+	})
+	c.via(MechUserHooks, func() { c.hooksFile(filepath.Join(e.CodexHome, "hooks.json"), ScopeGlobal, "", "", AgentCodex) })
 
-	c.mcpTOMLFile(filepath.Join(e.CodexHome, "config.toml"), ScopeGlobal, "", AgentCodex)
-	c.mcpTOMLFile(filepath.Join(e.ProjectRoot, ".codex", "config.toml"), ScopeProject, "project config — only applied for trusted projects", AgentCodex)
+	c.via(MechUserMCP, func() { c.mcpTOMLFile(filepath.Join(e.CodexHome, "config.toml"), ScopeGlobal, "", AgentCodex) })
+	c.via(MechProjectMCP, func() {
+		c.mcpTOMLFile(filepath.Join(e.ProjectRoot, ".codex", "config.toml"), ScopeProject, "project config — only applied for trusted projects", AgentCodex)
+	})
 
-	c.info("Codex system prompt", codexSystemPromptInfo, AgentCodex)
+	c.info(MechBuiltinPrompt, "Codex system prompt", codexSystemPromptInfo, AgentCodex)
 }
 
 const codexSystemPromptInfo = `# Codex system prompt

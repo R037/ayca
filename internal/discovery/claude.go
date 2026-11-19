@@ -15,26 +15,36 @@ func discoverClaude(c *collector) {
 	// Managed policy: deployed by administrators, applies to every user and
 	// project on the machine, and cannot be excluded.
 	const policy = "managed policy — applies machine-wide and cannot be overridden"
-	c.file(filepath.Join(e.ManagedDir, "CLAUDE.md"), CategoryInstruction, ScopeSystem, policy, AgentClaude)
-	c.hooksFile(filepath.Join(e.ManagedDir, "managed-settings.json"), ScopeSystem, policy, "", AgentClaude)
-	c.mcpJSONFile(filepath.Join(e.ManagedDir, "managed-mcp.json"), ScopeSystem, policy, AgentClaude)
+	c.via(MechManagedInstructions, func() {
+		c.file(filepath.Join(e.ManagedDir, "CLAUDE.md"), CategoryInstruction, ScopeSystem, policy, AgentClaude)
+	})
+	c.via(MechManagedHooks, func() {
+		c.hooksFile(filepath.Join(e.ManagedDir, "managed-settings.json"), ScopeSystem, policy, "", AgentClaude)
+	})
+	c.via(MechManagedMCP, func() {
+		c.mcpJSONFile(filepath.Join(e.ManagedDir, "managed-mcp.json"), ScopeSystem, policy, AgentClaude)
+	})
 
 	// Global first so that, if the project *is* the home directory, the
 	// user-level files keep their global scope.
-	c.file(filepath.Join(e.ClaudeDir, "CLAUDE.md"), CategoryInstruction, ScopeGlobal, "user memory", AgentClaude)
-	c.ruleDir(filepath.Join(e.ClaudeDir, "rules"), mdExts, ScopeGlobal, "user rules", AgentClaude)
+	c.via(MechUserInstructions, func() {
+		c.file(filepath.Join(e.ClaudeDir, "CLAUDE.md"), CategoryInstruction, ScopeGlobal, "user memory", AgentClaude)
+	})
+	c.via(MechUserRules, func() { c.ruleDir(filepath.Join(e.ClaudeDir, "rules"), mdExts, ScopeGlobal, "user rules", AgentClaude) })
 
 	// Claude Code reads CLAUDE.md files from the working directory up to the
 	// filesystem root; ancestors are listed nearest-first.
 	dirs := append(slices.Clone(e.ProjectDirs()), e.AncestorDirs()...)
 	for _, d := range dirs {
 		scope := e.scopeOf(d)
-		c.file(filepath.Join(d, "CLAUDE.md"), CategoryInstruction, scope, "", AgentClaude)
-		c.file(filepath.Join(d, ".claude", "CLAUDE.md"), CategoryInstruction, scope, "", AgentClaude)
-		c.file(filepath.Join(d, "CLAUDE.local.md"), CategoryInstruction, scope, "local (usually git-ignored)", AgentClaude)
+		c.via(MechDirInstructions, func() { c.file(filepath.Join(d, "CLAUDE.md"), CategoryInstruction, scope, "", AgentClaude) })
+		c.via(MechDirInstructions, func() { c.file(filepath.Join(d, ".claude", "CLAUDE.md"), CategoryInstruction, scope, "", AgentClaude) })
+		c.via(MechLocalInstructions, func() {
+			c.file(filepath.Join(d, "CLAUDE.local.md"), CategoryInstruction, scope, "local (usually git-ignored)", AgentClaude)
+		})
 	}
 
-	c.autoMemory()
+	c.via(MechAutoMemory, func() { c.autoMemory() })
 
 	styleNote := ""
 	c.outputStyle = settings.outputStyle
@@ -43,36 +53,56 @@ func discoverClaude(c *collector) {
 	}
 	for _, d := range e.ProjectDirs() {
 		cd := filepath.Join(d, ".claude")
-		c.ruleDir(filepath.Join(cd, "rules"), mdExts, ScopeProject, "", AgentClaude)
-		c.skills(filepath.Join(cd, "skills"), ScopeProject, "", AgentClaude)
-		c.fileDir(filepath.Join(cd, "agents"), "", CategoryAgent, mdExts, ScopeProject, "", AgentClaude)
-		c.fileDir(filepath.Join(cd, "commands"), "", CategoryCommand, mdExts, ScopeProject, "", AgentClaude)
-		c.fileDir(filepath.Join(cd, "output-styles"), "", CategoryOutputStyle, mdExts, ScopeProject, styleNote, AgentClaude)
+		c.via(MechProjectRules, func() { c.ruleDir(filepath.Join(cd, "rules"), mdExts, ScopeProject, "", AgentClaude) })
+		c.via(MechProjectSkills, func() { c.skills(filepath.Join(cd, "skills"), ScopeProject, "", AgentClaude) })
+		c.via(MechProjectAgents, func() {
+			c.fileDir(filepath.Join(cd, "agents"), "", CategoryAgent, mdExts, ScopeProject, "", AgentClaude)
+		})
+		c.via(MechProjectCommands, func() {
+			c.fileDir(filepath.Join(cd, "commands"), "", CategoryCommand, mdExts, ScopeProject, "", AgentClaude)
+		})
+		c.via(MechProjectOutputStyles, func() {
+			c.fileDir(filepath.Join(cd, "output-styles"), "", CategoryOutputStyle, mdExts, ScopeProject, styleNote, AgentClaude)
+		})
 	}
-	c.skills(filepath.Join(e.ClaudeDir, "skills"), ScopeGlobal, "", AgentClaude)
-	c.fileDir(filepath.Join(e.ClaudeDir, "agents"), "", CategoryAgent, mdExts, ScopeGlobal, "", AgentClaude)
-	c.fileDir(filepath.Join(e.ClaudeDir, "commands"), "", CategoryCommand, mdExts, ScopeGlobal, "", AgentClaude)
-	c.fileDir(filepath.Join(e.ClaudeDir, "output-styles"), "", CategoryOutputStyle, mdExts, ScopeGlobal, styleNote, AgentClaude)
+	c.via(MechUserSkills, func() { c.skills(filepath.Join(e.ClaudeDir, "skills"), ScopeGlobal, "", AgentClaude) })
+	c.via(MechUserAgents, func() {
+		c.fileDir(filepath.Join(e.ClaudeDir, "agents"), "", CategoryAgent, mdExts, ScopeGlobal, "", AgentClaude)
+	})
+	c.via(MechUserCommands, func() {
+		c.fileDir(filepath.Join(e.ClaudeDir, "commands"), "", CategoryCommand, mdExts, ScopeGlobal, "", AgentClaude)
+	})
+	c.via(MechUserOutputStyles, func() {
+		c.fileDir(filepath.Join(e.ClaudeDir, "output-styles"), "", CategoryOutputStyle, mdExts, ScopeGlobal, styleNote, AgentClaude)
+	})
 
 	// Hooks from settings files (user, project, local).
-	c.hooksFile(filepath.Join(e.ClaudeDir, "settings.json"), ScopeGlobal, "", "", AgentClaude)
-	c.hooksFile(filepath.Join(e.ProjectRoot, ".claude", "settings.json"), ScopeProject, "", "", AgentClaude)
-	c.hooksFile(filepath.Join(e.ProjectRoot, ".claude", "settings.local.json"), ScopeProject, "local settings", "", AgentClaude)
+	c.via(MechUserHooks, func() { c.hooksFile(filepath.Join(e.ClaudeDir, "settings.json"), ScopeGlobal, "", "", AgentClaude) })
+	c.via(MechProjectHooks, func() {
+		c.hooksFile(filepath.Join(e.ProjectRoot, ".claude", "settings.json"), ScopeProject, "", "", AgentClaude)
+	})
+	c.via(MechLocalHooks, func() {
+		c.hooksFile(filepath.Join(e.ProjectRoot, ".claude", "settings.local.json"), ScopeProject, "local settings", "", AgentClaude)
+	})
 
 	claudePlugins(c, settings)
 
 	// MCP: project (.mcp.json, shared), user and local scopes (~/.claude.json).
-	c.mcpJSONFile(filepath.Join(e.ProjectRoot, ".mcp.json"), ScopeProject, "project scope (.mcp.json)", AgentClaude)
+	c.via(MechProjectMCP, func() {
+		c.mcpJSONFile(filepath.Join(e.ProjectRoot, ".mcp.json"), ScopeProject, "project scope (.mcp.json)", AgentClaude)
+	})
 	doc, _ := c.readJSON(e.ClaudeJSON)
 	if servers, ok := doc["mcpServers"].(map[string]any); ok {
-		c.mcpServers(e.ClaudeJSON, servers, ScopeGlobal, "user scope", AgentClaude)
+		c.via(MechUserMCP, func() { c.mcpServers(e.ClaudeJSON, servers, ScopeGlobal, "user scope", AgentClaude) })
 	}
 	if projects, ok := doc["projects"].(map[string]any); ok {
 		for _, key := range uniqueDirs(e.ProjectRoot, e.Cwd) {
 			p, _ := projects[key].(map[string]any)
 			if servers, ok := p["mcpServers"].(map[string]any); ok {
-				c.mcpServers(e.ClaudeJSON, servers, ScopeProject,
-					"local scope — private to you, stored in "+e.Tilde(e.ClaudeJSON), AgentClaude)
+				c.via(MechLocalMCP, func() {
+					c.mcpServers(e.ClaudeJSON, servers, ScopeProject,
+						"local scope — private to you, stored in "+e.Tilde(e.ClaudeJSON), AgentClaude)
+				})
 			}
 		}
 	}
@@ -189,23 +219,33 @@ func claudePlugins(c *collector, settings claudeSettings) {
 				disabled = true
 			}
 			add := func() {
-				c.skills(filepath.Join(root, "skills"), scope, note, AgentClaude)
-				c.fileDir(filepath.Join(root, "agents"), name+": agents/", CategoryAgent, mdExts, scope, note, AgentClaude)
-				c.fileDir(filepath.Join(root, "commands"), name+": commands/", CategoryCommand, mdExts, scope, note, AgentClaude)
-				c.fileDir(filepath.Join(root, "output-styles"), name+": output-styles/", CategoryOutputStyle, mdExts, scope, note, AgentClaude)
-				c.hooksFile(filepath.Join(root, "hooks", "hooks.json"), scope, note, root, AgentClaude)
-				if manifest, ok := c.readJSON(filepath.Join(root, ".claude-plugin", "plugin.json")); ok {
-					if hooks, ok := manifest["hooks"].(map[string]any); ok {
-						c.hooks(filepath.Join(root, ".claude-plugin", "plugin.json"), hooks, scope, note, root, AgentClaude)
+				c.via(MechPluginSkills, func() { c.skills(filepath.Join(root, "skills"), scope, note, AgentClaude) })
+				c.via(MechPluginAgents, func() {
+					c.fileDir(filepath.Join(root, "agents"), name+": agents/", CategoryAgent, mdExts, scope, note, AgentClaude)
+				})
+				c.via(MechPluginCommands, func() {
+					c.fileDir(filepath.Join(root, "commands"), name+": commands/", CategoryCommand, mdExts, scope, note, AgentClaude)
+				})
+				c.via(MechPluginOutputStyles, func() {
+					c.fileDir(filepath.Join(root, "output-styles"), name+": output-styles/", CategoryOutputStyle, mdExts, scope, note, AgentClaude)
+				})
+				c.via(MechPluginHooks, func() {
+					c.hooksFile(filepath.Join(root, "hooks", "hooks.json"), scope, note, root, AgentClaude)
+					if manifest, ok := c.readJSON(filepath.Join(root, ".claude-plugin", "plugin.json")); ok {
+						if hooks, ok := manifest["hooks"].(map[string]any); ok {
+							c.hooks(filepath.Join(root, ".claude-plugin", "plugin.json"), hooks, scope, note, root, AgentClaude)
+						}
 					}
+				})
+				c.via(MechPluginMCP, func() { c.mcpJSONFile(filepath.Join(root, ".mcp.json"), scope, note, AgentClaude) })
+			}
+			c.fromPlugin(name, disabled, func() {
+				if disabled {
+					c.deferring(add)
+				} else {
+					add()
 				}
-				c.mcpJSONFile(filepath.Join(root, ".mcp.json"), scope, note, AgentClaude)
-			}
-			if disabled {
-				c.deferring(add)
-			} else {
-				add()
-			}
+			})
 		}
 	}
 }

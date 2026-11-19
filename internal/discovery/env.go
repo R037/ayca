@@ -82,6 +82,19 @@ func NewEnvWith(cwd, home string, getenv func(string) string) Env {
 	return e
 }
 
+// WithCwd returns a copy of e that starts at dir. The project root is kept
+// when dir is the root or inside it, otherwise it is searched from dir.
+func (e Env) WithCwd(dir string) Env {
+	dir = filepath.Clean(dir)
+	e.Cwd = dir
+	if dir != e.ProjectRoot {
+		if _, ok := under(e.ProjectRoot, dir); !ok {
+			e.ProjectRoot = findProjectRoot(dir)
+		}
+	}
+	return e
+}
+
 // findProjectRoot walks up from dir looking for a .git entry (directory or
 // worktree file). Without one, dir itself is the project root.
 func findProjectRoot(dir string) string {

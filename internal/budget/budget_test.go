@@ -239,7 +239,7 @@ func TestFrontmatter(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "x.md")
 	write(t, p, "---\nname: 'demo'\ndescription: >\n  folded line one\n  line two\nglobs:\n  - a\n  - b\n---\nbody\n")
 	fm := frontmatter(p)
-	if fm["name"] != "demo" || fm["description"] != "folded line one line two" || fm["globs"] != "a b" {
+	if fm["name"] != "demo" || fm["description"] != "folded line one line two" || fm["globs"] != "a, b" {
 		t.Errorf("frontmatter = %#v", fm)
 	}
 	if bodyTokens(p) != tokens(len("body\n")) {

@@ -83,8 +83,10 @@ func discoverNested(c *collector, enabled func(string) bool) {
 			rel, _ := filepath.Rel(e.ProjectRoot, sub)
 			note := "nested — loaded on demand when the agent works in " + rel + "/"
 			if enabled(AgentClaude) {
-				c.file(filepath.Join(sub, "CLAUDE.md"), CategoryInstruction, ScopeProject, note, AgentClaude)
-				c.file(filepath.Join(sub, "CLAUDE.local.md"), CategoryInstruction, ScopeProject, note, AgentClaude)
+				c.via(MechNestedInstructions, func() {
+					c.file(filepath.Join(sub, "CLAUDE.md"), CategoryInstruction, ScopeProject, note, AgentClaude)
+					c.file(filepath.Join(sub, "CLAUDE.local.md"), CategoryInstruction, ScopeProject, note, AgentClaude)
+				})
 			}
 			var agentsReaders []string
 			if enabled(AgentCodex) {
@@ -94,10 +96,14 @@ func discoverNested(c *collector, enabled func(string) bool) {
 				agentsReaders = append(agentsReaders, AgentCursor)
 			}
 			if len(agentsReaders) > 0 {
-				c.file(filepath.Join(sub, "AGENTS.md"), CategoryInstruction, ScopeProject, note, agentsReaders...)
+				c.via(MechNestedInstructions, func() {
+					c.file(filepath.Join(sub, "AGENTS.md"), CategoryInstruction, ScopeProject, note, agentsReaders...)
+				})
 			}
 			if enabled(AgentCursor) {
-				c.ruleDir(filepath.Join(sub, ".cursor", "rules"), []string{".mdc", ".md"}, ScopeProject, note, AgentCursor)
+				c.via(MechNestedRules, func() {
+					c.ruleDir(filepath.Join(sub, ".cursor", "rules"), []string{".mdc", ".md"}, ScopeProject, note, AgentCursor)
+				})
 			}
 			walk(sub, depth+1)
 		}
