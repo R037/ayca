@@ -80,8 +80,32 @@ ayca --path ~/code/my-app    # inspect another project
 ayca --agent claude,cursor   # only show context for some agents
 ayca --window 1m             # compare against a 1M-token context window
 ayca --list                  # print the discovered context as plain text (no TUI)
+ayca --json                  # print it as JSON, for scripts and AI agents
 ayca --version
 ```
+
+### Let an agent prune your context
+
+`ayca --json` gives agents the same data as the TUI. It lists every item with
+its absolute path, scope, the agents that read it, size, estimated tokens and
+whether it loads at session start, followed by the startup budget per agent.
+The format is versioned (`schema_version`).
+
+The repo includes a skill that uses it to audit your setup and suggest cuts:
+[`skills/prune-context`](skills/prune-context/SKILL.md). To install it, copy
+the folder to `~/.claude/skills/` for Claude Code, or `~/.agents/skills/` for
+Codex:
+
+```sh
+git clone https://github.com/R037/ayca /tmp/ayca
+cp -r /tmp/ayca/skills/prune-context ~/.claude/skills/
+```
+
+Then ask the agent to "prune my context", or something similar. It runs
+`ayca --json` and looks for unused skills and MCP servers, duplicate
+instructions, bloated files and broken imports. It proposes changes with the
+tokens each one saves, and edits nothing until you approve. AYCA itself stays
+read-only.
 
 ### Keyboard shortcuts
 
