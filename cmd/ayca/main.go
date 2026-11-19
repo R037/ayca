@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -19,7 +20,19 @@ import (
 	"github.com/R037/ayca/internal/tui"
 )
 
-var version = "0.1.0-dev"
+// version is set with -ldflags by `make build`; otherwise it comes from
+// the module version that `go install …@v0.1.0` records in the binary.
+var version = ""
+
+func versionString() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -44,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *showVersion {
-		fmt.Fprintln(stdout, "ayca", version)
+		fmt.Fprintln(stdout, "ayca", versionString())
 		return 0
 	}
 
