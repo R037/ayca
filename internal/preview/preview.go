@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/frontmatter"
 )
 
 // MaxBytes caps how much of a file is read for preview.
@@ -40,6 +41,12 @@ type Content struct {
 	Truncated  bool
 	Binary     bool
 	Note       string // explanation shown instead of / above content
+	// Frontmatter and Body are set for Markdown files: the parsed leading
+	// front matter fields and the text after it (Text itself when there is
+	// none).
+	Frontmatter []frontmatter.Field
+	Body        string
+	Lines       int // number of lines in Text
 }
 
 // Tokens is a rough token estimate (≈4 bytes per token), clearly an
@@ -57,7 +64,54 @@ var codeLangs = map[string]string{
 	".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".ts": "typescript",
 	".go": "go", ".rb": "ruby", ".rs": "rust", ".html": "html", ".css": "css", ".xml": "xml",
 	".sql": "sql", ".lua": "lua",
+	".ps1": "powershell", ".tsx": "tsx", ".jsx": "jsx", ".java": "java", ".kt": "kotlin",
+	".swift": "swift", ".php": "php", ".c": "c", ".h": "c", ".cpp": "cpp", ".cs": "csharp",
+	".ini": "ini", ".cfg": "ini",
 }
+
+// shebangLangs maps an interpreter name to a highlighting language.
+var shebangLangs = map[string]string{
+	"python": "python", "python2": "python", "python3": "python",
+	"bash": "bash", "sh": "bash", "zsh": "bash", "dash": "bash", "ksh": "bash",
+	"node": "javascript", "nodejs": "javascript", "deno": "typescript", "bun": "typescript",
+	"ruby": "ruby", "perl": "perl",
+}
+
+// shebangLang returns the language named by a "#!" first line, or "".
+func shebangLang(text string) string {
+	first, _, _ := strings.Cut(text, "\n")
+	rest, ok := strings.CutPrefix(strings.TrimSpace(first), "#!")
+	if !ok {
+		return ""
+	}
+	fields := strings.Fields(rest)
+	for len(fields) > 0 {
+		base := filepath.Base(fields[0])
+		if base == "env" {
+			fields = fields[1:]
+			for len(fields) > 0 && strings.HasPrefix(fields[0], "-") {
+				fields = fields[1:]
+			}
+			continue
+		}
+		l := shebangLangs[base]
+		if l == "" {
+			// python3.11 and friends
+			if i := strings.IndexByte(base, '.'); i > 0 {
+				l = shebangLangs[base[:i]]
+			}
+		}
+		return l
+	}
+	return ""
+}
+
+func isEnvFile(base string) bool {
+	return base == ".env" || strings.HasPrefix(base, ".env.") || strings.HasSuffix(base, ".env")
+}
+
+// LoadPath loads any file for preview (used for followed references).
+func LoadPath(path string) Content { return loadFile(path) }
 
 // Load reads the content to preview for it.
 func Load(it *discovery.Item) Content {
@@ -91,6 +145,13 @@ func Load(it *discovery.Item) Content {
 
 func loadFile(path string) Content {
 	c := Content{SourcePath: path, Size: -1}
+	if isEnvFile(strings.ToLower(filepath.Base(path))) {
+		if fi, err := os.Stat(path); err == nil {
+			c.Size = fi.Size()
+		}
+		c.Note = "Environment file — values not shown."
+		return c
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		c.Note = "Cannot read file: " + err.Error()
@@ -116,12 +177,34 @@ func loadFile(path string) Content {
 	c.Text = string(data)
 	ext := strings.ToLower(filepath.Ext(path))
 	switch {
-	case ext == ".md" || ext == ".mdc" || ext == ".markdown" || filepath.Base(path) == ".cursorrules":
+	case ext == ".md" || ext == ".mdc" || ext == ".markdown" || ext == ".mdx" || filepath.Base(path) == ".cursorrules":
 		c.Format = FormatMarkdown
 	case codeLangs[ext] != "":
 		c.Format, c.Lang = FormatCode, codeLangs[ext]
+	case ext == "":
+		if l := shebangLang(c.Text); l != "" {
+			c.Format, c.Lang = FormatCode, l
+		}
 	}
+	c.Body = c.Text
+	if c.Format == FormatMarkdown {
+		if fm, body, ok := frontmatter.Split(c.Text); ok {
+			c.Frontmatter, c.Body = frontmatter.Parse(fm), body
+		}
+	}
+	c.Lines = countLines(c.Text)
 	return c
+}
+
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
 }
 
 func listing(it *discovery.Item) string {
@@ -199,7 +282,7 @@ func (r *Renderer) Render(c Content, width int, raw bool) string {
 	} else {
 		switch c.Format {
 		case FormatMarkdown:
-			out.WriteString(r.markdown(frontmatterAsCode(c.Text), width))
+			out.WriteString(r.markdownDoc(c.Text, width))
 		case FormatCode:
 			out.WriteString(r.markdown(fence(c.Text, c.Lang), width))
 		default:
@@ -230,22 +313,25 @@ func fence(text, lang string) string {
 	return f + lang + "\n" + strings.TrimRight(text, "\n") + "\n" + f + "\n"
 }
 
-// frontmatterAsCode turns a leading YAML front matter block (common in
-// SKILL.md and .mdc files) into a fenced YAML block so it renders as data
-// instead of a horizontal rule followed by run-on text.
-func frontmatterAsCode(md string) string {
-	norm := strings.ReplaceAll(md, "\r\n", "\n")
-	if !strings.HasPrefix(norm, "---\n") {
-		return md
+// markdownDoc renders Markdown. A leading front matter block becomes a
+// compact key/value table, a separator, then the rendered body. Malformed
+// front matter renders as part of the text.
+func (r *Renderer) markdownDoc(text string, width int) string {
+	fm, body, ok := frontmatter.Split(text)
+	fields := frontmatter.Parse(fm)
+	if !ok || len(fields) == 0 {
+		return r.markdown(text, width)
 	}
-	end := strings.Index(norm[4:], "\n---")
-	if end < 0 {
-		return md
+	var b strings.Builder
+	b.WriteString("**Frontmatter**\n\n")
+	for _, f := range fields {
+		fmt.Fprintf(&b, "- **%s:** %s\n", cell(f.Key), cell(f.Value))
 	}
-	fm := norm[4 : 4+end]
-	rest := norm[4+end+4:]
-	rest = strings.TrimPrefix(rest, "\n")
-	return fence(fm, "yaml") + "\n" + rest
+	b.WriteString("\n---\n\n")
+	b.WriteString(body)
+	return r.markdown(b.String(), width)
 }
+
+func cell(s string) string { return strings.ReplaceAll(s, "\n", " ") }
 
 func expandTabs(s string) string { return strings.ReplaceAll(s, "\t", "    ") }

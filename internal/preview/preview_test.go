@@ -76,17 +76,6 @@ func TestVirtualMCPShowsConfigOnly(t *testing.T) {
 	}
 }
 
-func TestFrontmatterAsCode(t *testing.T) {
-	in := "---\nname: pdf\ndescription: Work with PDFs\n---\n# Title\nBody"
-	want := "```yaml\nname: pdf\ndescription: Work with PDFs\n```\n\n# Title\nBody"
-	if got := frontmatterAsCode(in); got != want {
-		t.Fatalf("got %q", got)
-	}
-	if got := frontmatterAsCode("# No frontmatter"); got != "# No frontmatter" {
-		t.Fatalf("changed plain markdown: %q", got)
-	}
-}
-
 func TestRenderRawAndRendered(t *testing.T) {
 	r := NewRendererStyle("dark")
 	c := Content{Text: "# Hello\n\n- **bold** item", Format: FormatMarkdown}
