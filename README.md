@@ -40,12 +40,16 @@ Requires Go 1.24.2 or later.
 
 ```sh
 git clone <this repo> ayca && cd ayca
-make install            # same as: go install ./cmd/ayca
+make install            # installs to ~/.local/bin/ayca
 ```
 
-This puts `ayca` in `$(go env GOPATH)/bin` (usually `~/go/bin`). Make sure
-that directory is on your `PATH`. To build without installing, run `make build`;
-the binary ends up at `./bin/ayca`.
+Make sure `~/.local/bin` is on your `PATH`. To install somewhere else, use
+`make install PREFIX=/usr/local`. To build without installing, run
+`make build`; the binary ends up at `./bin/ayca`.
+
+> If you use a version manager such as mise or asdf, avoid plain
+> `go install`. It puts the binary in the toolchain's own directory, and the
+> shim then only works in projects that use that Go version.
 
 ## Usage
 
