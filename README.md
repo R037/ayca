@@ -45,6 +45,18 @@ Requires Go 1.24.2 or later.
 go install github.com/R037/ayca/cmd/ayca@latest
 ```
 
+`go install` puts the binary in `$(go env GOPATH)/bin`, which is usually
+`~/go/bin`. If running `ayca` then gives `command not found`, that directory
+isn't on your `PATH` yet. Add it to your shell profile (`~/.bashrc`,
+`~/.zshrc`, ...) and open a new terminal:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+If you set `GOBIN`, the binary goes there instead, so put that directory on
+your `PATH`.
+
 Or from a clone, which also stamps the version:
 
 ```sh
