@@ -252,9 +252,13 @@ func TestAncestorsFindPathExpandTo(t *testing.T) {
 	if got := tree.FindPath(roots, f.H(".agents/skills/pdf")); got != id {
 		t.Errorf("FindPath physical = %q want %q", got, id)
 	}
-	if got := tree.FindPath(roots, f.H(".claude/skills/pdf/SKILL.md")); got == "" {
-		// children are not indexed by directory prefix; only exact matches count
-		t.Log("no match for file inside symlink dir (exact matching)")
+	// Files inside a symlinked directory are found from either side.
+	for name, r := range map[string][]*tree.Node{"filesystem": roots, "hierarchy": tree.BuildHierarchy(items, "claude", env), "inventory": tree.Build(items)} {
+		a := tree.FindPath(r, f.H(".claude/skills/pdf/SKILL.md"))
+		b := tree.FindPath(r, f.H(".agents/skills/pdf/SKILL.md"))
+		if a == "" || a != b {
+			t.Errorf("%s: SKILL.md via symlink = %q, via real path = %q", name, a, b)
+		}
 	}
 	if got := tree.FindPath(roots, f.H(".claude/skills/pdf")); got != id {
 		t.Errorf("FindPath via symlink = %q want %q (non-link preferred)", got, id)

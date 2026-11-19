@@ -47,6 +47,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	window := fs.String("window", "", "context window size to compare against, e.g. 200k or 1m (default: per agent — claude 200k, codex 272k, cursor 200k)")
 	list := fs.Bool("list", false, "print discovered context as plain text and exit (no TUI)")
 	jsonOut := fs.Bool("json", false, "print discovered context and the startup budget as JSON to stdout and exit (no TUI; for scripts and AI agents; cannot be combined with --list)")
+	view := fs.String("view", "", "view to start the TUI in: "+strings.Join(tui.ViewNames(), ", ")+" (default hierarchy)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "AYCA — All Your Context Are Belong To Us. Know what your agents know.\n\nUsage: ayca [flags]\n\nFlags:\n")
@@ -65,6 +66,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if *jsonOut && *list {
 		fmt.Fprintln(stderr, "ayca: --json and --list cannot be used together")
+		return 2
+	}
+
+	startView := *view
+	if startView == "" {
+		startView = tui.ViewNames()[0]
+	}
+	if !slices.Contains(tui.ViewNames(), strings.ToLower(startView)) {
+		fmt.Fprintf(stderr, "ayca: unknown view %q (supported: %s)\n", *view, strings.Join(tui.ViewNames(), ", "))
 		return 2
 	}
 
@@ -109,7 +119,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	// Detect the background before Bubble Tea takes over the terminal.
 	renderer := preview.NewRenderer(lipgloss.HasDarkBackground())
-	p := tea.NewProgram(tui.New(res, agents, windows, renderer), tea.WithAltScreen())
+	model, err := tui.New(res, agents, windows, renderer).WithView(startView)
+	if err != nil {
+		fmt.Fprintln(stderr, "ayca:", err)
+		return 2
+	}
+	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(stderr, "ayca:", err)
 		return 1

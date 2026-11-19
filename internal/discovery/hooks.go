@@ -152,6 +152,12 @@ func (c *collector) hookScripts(command, baseDir, pluginRoot string, scope Scope
 			p = t
 		case strings.HasPrefix(t, "./") || strings.HasPrefix(t, "../"):
 			p = filepath.Join(baseDir, t)
+			// Claude Code runs hooks from the project directory.
+			if !fileExists(p) && e.ProjectRoot != "" {
+				p = filepath.Join(e.ProjectRoot, t)
+			}
+		case !strings.HasPrefix(t, "-") && strings.Contains(t, "/") && e.ProjectRoot != "" && fileExists(filepath.Join(e.ProjectRoot, t)):
+			p = filepath.Join(e.ProjectRoot, t)
 		default:
 			continue
 		}

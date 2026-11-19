@@ -191,7 +191,12 @@ func (e *estimator) item(it *discovery.Item) {
 		e.files(it, e.rule)
 	case discovery.CategorySkill:
 		if it.IsDir {
-			e.add(it, filepath.Join(it.Path, "SKILL.md"), descTokens(filepath.Join(it.Path, "SKILL.md"), it.Name), HowDescription)
+			skill := filepath.Join(it.Path, "SKILL.md")
+			// A skill only you can invoke is not listed to the model.
+			if strings.EqualFold(frontmatter(skill)["disable-model-invocation"], "true") {
+				return
+			}
+			e.add(it, skill, descTokens(skill, it.Name), HowDescription)
 		}
 	case discovery.CategoryAgent:
 		if e.agent == discovery.AgentClaude {

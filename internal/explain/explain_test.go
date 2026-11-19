@@ -85,6 +85,16 @@ func TestExplainFixture(t *testing.T) {
 			t.Errorf("loads = %+v", e.Loads)
 		}
 	})
+	t.Run("related wording", func(t *testing.T) {
+		e := ex(byPath(t, res, h(".claude/skills/frontend-design")), "claude")
+		rel := strings.Join(e.Related, "\n")
+		if strings.Contains(rel, fx.Home) {
+			t.Errorf("related has untilded home path:\n%s", rel)
+		}
+		if !strings.Contains(rel, " +") || !strings.Contains(rel, "more") {
+			t.Errorf("supporting files not capped at 3:\n%s", rel)
+		}
+	})
 	t.Run("skill script", func(t *testing.T) {
 		sk := h(".claude/skills/frontend-design")
 		c := chainWhere(res.Items, func(c []*discovery.Item) bool { return c[len(c)-1].Path == sk+"/scripts/validate.sh" })

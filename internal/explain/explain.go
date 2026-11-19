@@ -456,6 +456,22 @@ func capList(names []string, n int) string {
 	return strings.Join(names[:n], ", ") + fmt.Sprintf(", … (%d more)", len(names)-n)
 }
 
+func tildeAll(env discovery.Env, ps []string) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = env.Tilde(p)
+	}
+	return out
+}
+
+// capMore joins up to n names and appends "+K more" for the rest.
+func capMore(names []string, n int) string {
+	if len(names) <= n {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:n], ", ") + fmt.Sprintf(" +%d more", len(names)-n)
+}
+
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, one)
@@ -507,7 +523,7 @@ func related(chain []*discovery.Item, agent string, ctx effective.Context) []str
 		out = append(out, fmt.Sprintf("%s is a symlink to %s.", ctx.Env.DisplayPath(last.Path), ctx.Env.DisplayPath(r)))
 	}
 	if len(last.Aliases) > 0 {
-		out = append(out, fmt.Sprintf("The same item is reachable from %s: %s.", plural(len(last.Aliases)+1, "location", "locations"), capList(append([]string{last.Path}, last.Aliases...), 4)))
+		out = append(out, fmt.Sprintf("The same item is reachable from %s: %s.", plural(len(last.Aliases)+1, "location", "locations"), capList(tildeAll(ctx.Env, append([]string{last.Path}, last.Aliases...)), 4)))
 	}
 	if p := top.Provider(); p != "" && top.DisabledFor(agent) {
 		out = append(out, fmt.Sprintf("Provided by %s, which is disabled in settings, so none of its items load.", strings.Replace(p, "plugin:", "plugin ", 1)))
@@ -551,7 +567,7 @@ func related(chain []*discovery.Item, agent string, ctx effective.Context) []str
 			}
 		}
 		if len(sup) > 0 {
-			out = append(out, fmt.Sprintf("%s: %s.", plural(len(sup), "supporting file", "supporting files"), capList(sup, 4)))
+			out = append(out, fmt.Sprintf("%s: %s.", plural(len(sup), "supporting file", "supporting files"), capMore(sup, 3)))
 		}
 		for _, ref := range missingRefs(top.Path) {
 			out = append(out, fmt.Sprintf("SKILL.md points to %s, which does not exist.", ref))

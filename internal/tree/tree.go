@@ -181,15 +181,31 @@ func FindPath(roots []*Node, absPath string) string {
 		}
 		return false
 	}
+	exactPath := func(it *discovery.Item) bool { return it.Path != "" && filepath.Clean(it.Path) == want }
+	exactAlias := func(it *discovery.Item) bool {
+		if it.Target != "" && filepath.Clean(it.Target) == want {
+			return true
+		}
+		for _, a := range it.Aliases {
+			if filepath.Clean(a) == want {
+				return true
+			}
+		}
+		return false
+	}
 	var walk func(nodes []*Node, pass int) string
 	walk = func(nodes []*Node, pass int) string {
 		for _, n := range nodes {
 			switch {
-			case pass == 0 && n.Item != nil && !n.Link && itemMatch(n.Item):
+			case pass == 0 && n.Item != nil && exactPath(n.Item):
 				return n.ID
-			case pass == 1 && n.Item != nil && n.Link && itemMatch(n.Item):
+			case pass == 1 && n.Item != nil && exactAlias(n.Item):
 				return n.ID
-			case pass == 2 && n.Kind == KindDir && eq(n.Path):
+			case pass == 2 && n.Item != nil && !n.Link && itemMatch(n.Item):
+				return n.ID
+			case pass == 3 && n.Item != nil && n.Link && itemMatch(n.Item):
+				return n.ID
+			case pass == 4 && n.Kind == KindDir && eq(n.Path):
 				return n.ID
 			}
 			if id := walk(n.Children, pass); id != "" {
@@ -198,7 +214,7 @@ func FindPath(roots []*Node, absPath string) string {
 		}
 		return ""
 	}
-	for pass := 0; pass < 3; pass++ {
+	for pass := 0; pass < 5; pass++ {
 		if id := walk(roots, pass); id != "" {
 			return id
 		}

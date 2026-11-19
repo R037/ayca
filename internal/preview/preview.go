@@ -128,6 +128,8 @@ func Load(it *discovery.Item) Content {
 			note = "Hook as configured in this file. AYCA never runs hooks; scripts it references are listed below it in the tree. Values that look like secrets are masked."
 		}
 		return Content{SourcePath: it.Path, Text: string(data), Format: FormatCode, Lang: "json", Size: -1, Note: note}
+	case it.Cycle:
+		return Content{SourcePath: it.Path, Size: -1, Note: it.Note}
 	case it.IsDir:
 		// Folders whose meaning lives in one entry file preview that file.
 		entry := map[discovery.Category]string{discovery.CategorySkill: "SKILL.md", discovery.CategoryMemory: "MEMORY.md"}[it.Category]

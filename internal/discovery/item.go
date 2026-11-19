@@ -67,6 +67,7 @@ type Item struct {
 	Agents   []string // agents known to read this location
 	IsDir    bool
 	Virtual  bool // not a standalone file (e.g. an MCP server inside a config file)
+	Cycle    bool // symlinked directory pointing back at a directory being listed; not followed
 	Missing  bool // referenced (e.g. by an @import) but not found on disk
 	// DeferredFor lists the agents for which this item is not part of a
 	// session's starting context: nested files loaded on demand, shadowed

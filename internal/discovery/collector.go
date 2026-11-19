@@ -31,6 +31,9 @@ type collector struct {
 	provider   string
 	disabled   bool
 	shadowedBy string
+	// listing holds the real paths of the directories listDir is currently
+	// descending through, to detect symlink cycles.
+	listing []string
 }
 
 // via runs fn with every item it adds attributed to mechanism m.
@@ -298,6 +301,8 @@ func (c *collector) listDir(dir, parentID string, cat Category, scope Scope, age
 		c.warn(dir, err)
 		return nil
 	}
+	c.listing = append(c.listing, realPath(dir))
+	defer func() { c.listing = c.listing[:len(c.listing)-1] }()
 	// Directories first, then files, each alphabetical (os.ReadDir sorts by name).
 	sort.SliceStable(entries, func(i, j int) bool {
 		return entries[i].IsDir() && !entries[j].IsDir()
@@ -317,6 +322,16 @@ func (c *collector) listDir(dir, parentID string, cat Category, scope Scope, age
 			continue
 		}
 		id := parentID + "/" + e.Name()
+		if fi.IsDir() && e.Type()&fs.ModeSymlink != 0 {
+			if r := realPath(p); c.isCycle(r) {
+				out = append(out, Item{
+					ID: id, Name: e.Name() + "/", Path: p, Category: cat, Scope: scope,
+					Agents: agents, IsDir: true, Cycle: true,
+					Note: "symlink to " + c.env.Tilde(r) + " — not followed (cycle)",
+				})
+				continue
+			}
+		}
 		if fi.IsDir() {
 			out = append(out, Item{
 				ID: id, Name: e.Name() + "/", Path: p, Category: cat, Scope: scope,
@@ -346,4 +361,15 @@ func pruneEmptyDirs(items []Item) []Item {
 		out = append(out, it)
 	}
 	return out
+}
+
+// isCycle reports whether real equals, or is an ancestor of, a directory
+// currently being listed.
+func (c *collector) isCycle(real string) bool {
+	for _, d := range c.listing {
+		if d == real || strings.HasPrefix(d, real+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }

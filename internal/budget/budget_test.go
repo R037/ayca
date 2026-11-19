@@ -258,3 +258,19 @@ func TestByCategory(t *testing.T) {
 		t.Errorf("ByCategory = %+v", got)
 	}
 }
+
+func TestSkillDisabledForModelNotCounted(t *testing.T) {
+	res := setup(t, func(home, proj string) {
+		write(t, filepath.Join(home, ".claude", "skills", "manual", "SKILL.md"),
+			"---\nname: manual\ndescription: Only the user can run this.\ndisable-model-invocation: true\n---\n# Manual\n")
+		write(t, filepath.Join(home, ".claude", "skills", "auto", "SKILL.md"),
+			"---\nname: auto\ndescription: The model may use this.\n---\n# Auto\n")
+	})
+	a := agent(t, Estimate(res, nil, nil), discovery.AgentClaude)
+	if _, ok := entry(a, "manual"); ok {
+		t.Error("a skill with disable-model-invocation must not count at startup")
+	}
+	if _, ok := entry(a, "auto"); !ok {
+		t.Error("a normal skill should count its name and description")
+	}
+}

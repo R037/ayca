@@ -1,5 +1,8 @@
 // Package tui is the Bubble Tea interface: a context tree on the left and a
-// file preview on the right.
+// document reader on the right, with four perspectives on the same context
+// (Hierarchy, Effective, Filesystem, Inventory), an explain strip and
+// in-document links and search. It is read-only: it never executes or
+// fetches anything it finds.
 package tui
 
 import (
@@ -14,6 +17,7 @@ import (
 
 	"github.com/R037/ayca/internal/budget"
 	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/explain"
 	"github.com/R037/ayca/internal/preview"
 	"github.com/R037/ayca/internal/tree"
 )
@@ -25,7 +29,9 @@ const (
 	focusPreview
 )
 
-type scanDoneMsg discovery.Result
+// scanDoneMsg carries a full rescan: the launch directory, the project
+// root and the selected working directory.
+type scanDoneMsg struct{ base, full, at discovery.Result }
 
 // panel is a full-pane view that replaces the selected item's preview.
 type panel string
@@ -34,25 +40,41 @@ const (
 	panelNone     panel = ""
 	panelWarnings panel = "warnings"
 	panelBudget   panel = "budget"
+	panelExplain  panel = "explain"
+	panelHelp     panel = "help"
 )
+
+// singlePaneWidth is the terminal width below which only one pane is shown.
+const singlePaneWidth = 72
 
 // Model is the root Bubble Tea model.
 type Model struct {
-	env     discovery.Env
+	env     discovery.Env // the launch environment
 	agents  []string
 	windows map[string]int
 	budget  budget.Report
 
-	res   discovery.Result
-	roots []*tree.Node
-	state *tree.State
-	rows  []tree.Row
+	// base is the startup scan (launch directory); full is the scan at the
+	// project root; at is the scan at the selected working directory.
+	base, full, at discovery.Result
+	fullReady      bool
+	wd             string
+	atLoading      bool
+
+	view   viewID
+	agent  string
+	mem    map[string]viewMem
+	roots  []*tree.Node
+	chains map[string][]*discovery.Item // item chain behind Effective nodes
+	state  *tree.State
+	rows   []tree.Row
 
 	cursor, offset int
 	focus          focus
 
 	filter    textinput.Model
 	filtering bool
+	picker    *picker
 
 	raw      bool
 	panel    panel
@@ -62,7 +84,20 @@ type Model struct {
 	renderer  *preview.Renderer
 	contents  map[string]preview.Content
 	rendered  map[string]string
+	explCache map[string]explain.Explanation
 	previewID string
+	cur       string // rendered text of the current document
+
+	// reader
+	adhoc    *adhoc
+	history  []histEntry
+	refs     []preview.Ref
+	refIdx   int
+	find     textinput.Model
+	finding  bool
+	findFrom int
+	matches  []int
+	matchIdx int
 
 	width, height int
 }
@@ -74,34 +109,73 @@ func New(res discovery.Result, agents []string, windows map[string]int, renderer
 	ti.Prompt = "/ "
 	ti.Placeholder = "filter by name or path"
 	m := Model{
-		env:      res.Env,
-		agents:   agents,
-		windows:  windows,
-		state:    tree.NewState(),
-		filter:   ti,
-		vp:       viewport.New(0, 0),
-		renderer: renderer,
+		env:       res.Env,
+		agents:    agents,
+		windows:   windows,
+		state:     tree.NewState(),
+		mem:       map[string]viewMem{},
+		filter:    ti,
+		find:      newFindInput(),
+		vp:        viewport.New(0, 0),
+		renderer:  renderer,
+		base:      res,
+		at:        res,
+		wd:        res.Env.Cwd,
+		fullReady: res.Env.Cwd == res.Env.ProjectRoot,
+		refIdx:    -1,
+		matchIdx:  -1,
+		contents:  map[string]preview.Content{},
+		rendered:  map[string]string{},
+		explCache: map[string]explain.Explanation{},
 	}
-	m.setResult(res)
+	if m.fullReady {
+		m.full = res
+	}
+	m.agent = defaultAgent(res, m.enabledAgents())
+	m.budget = budget.Estimate(res, agents, windows)
+	m.rebuild()
+	m.refreshRows()
+	m.clampCursor()
 	return m
 }
 
-func (m *Model) setResult(res discovery.Result) {
+// WithView starts in the named view ("hierarchy", "effective", "filesystem"
+// or "inventory").
+func (m Model) WithView(name string) (Model, error) {
+	v, ok := parseView(name)
+	if !ok {
+		return m, fmt.Errorf("unknown view %q (supported: %s)", name, strings.Join(ViewNames(), ", "))
+	}
+	if v != m.view {
+		m.switchTo(v, m.agent)
+	}
+	return m, nil
+}
+
+// dataChanged rebuilds everything derived from the scans, keeping the
+// selection where possible.
+func (m *Model) dataChanged() {
 	var keepID string
 	if n := m.selected(); n != nil {
 		keepID = n.ID
 	}
-	m.res = res
-	m.budget = budget.Estimate(res, m.agents, m.windows)
-	m.roots = tree.Build(res.Items)
+	m.budget = budget.Estimate(m.base, m.agents, m.windows)
 	m.contents = map[string]preview.Content{}
 	m.rendered = map[string]string{}
+	m.explCache = map[string]explain.Explanation{}
+	m.adhoc, m.history = nil, nil
 	m.previewID = ""
+	m.rebuild()
 	m.refreshRows()
 	if i := tree.IndexOf(m.rows, keepID); i >= 0 {
 		m.cursor = i
 	}
 	m.clampCursor()
+}
+
+func (m *Model) setAt(res discovery.Result) {
+	m.at = res
+	m.dataChanged()
 }
 
 func (m *Model) refreshRows() {
@@ -115,12 +189,32 @@ func (m Model) selected() *tree.Node {
 	return nil
 }
 
-// Init implements tea.Model.
-func (m Model) Init() tea.Cmd { return nil }
+// Init implements tea.Model. When the app was started in a subdirectory,
+// the project-root scan (for Excluded and the directory picker) runs in the
+// background.
+func (m Model) Init() tea.Cmd {
+	if m.fullReady {
+		return nil
+	}
+	env, agents := m.env, m.agents
+	return func() tea.Msg {
+		return fullDoneMsg(discovery.Discover(env.WithCwd(env.ProjectRoot), agents))
+	}
+}
 
 func (m Model) rescan() tea.Cmd {
-	env, agents := m.env, m.agents
-	return func() tea.Msg { return scanDoneMsg(discovery.Discover(env, agents)) }
+	env, agents, wd := m.env, m.agents, m.wd
+	return func() tea.Msg {
+		base := discovery.Discover(env, agents)
+		full, at := base, base
+		if env.Cwd != env.ProjectRoot {
+			full = discovery.Discover(env.WithCwd(env.ProjectRoot), agents)
+		}
+		if wd != env.Cwd {
+			at = discovery.Discover(env.WithCwd(wd), agents)
+		}
+		return scanDoneMsg{base: base, full: full, at: at}
+	}
 }
 
 // Update implements tea.Model.
@@ -135,16 +229,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanDoneMsg:
 		m.scanning = false
-		m.setResult(discovery.Result(msg))
+		m.base, m.full, m.at, m.fullReady = msg.base, msg.full, msg.at, true
+		m.dataChanged()
 		m.layout()
+		return m, nil
+
+	case fullDoneMsg:
+		m.full, m.fullReady = discovery.Result(msg), true
+		m.dataChanged()
+		return m, nil
+
+	case atDoneMsg:
+		if msg.dir != m.wd {
+			return m, nil // superseded by a later choice
+		}
+		m.atLoading = false
+		m.setAt(msg.res)
 		return m, nil
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+		if m.picker != nil {
+			return m.updatePicker(msg)
+		}
 		if m.filtering {
 			return m.updateFilter(msg)
+		}
+		if m.finding {
+			return m.updateFind(msg)
 		}
 		// Fast typing or pasting can deliver several runes in one message;
 		// replay them one by one so e.g. "/foo" starts a search for "foo".
@@ -181,9 +295,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			m.togglePanel(panelBudget)
 			return m, nil
+		case "e":
+			m.togglePanel(panelExplain)
+			return m, nil
+		case "?":
+			m.togglePanel(panelHelp)
+			return m, nil
+		case "1", "2", "3", "4":
+			m.panel = panelNone
+			v := viewID(msg.Runes[0] - '1')
+			if v != m.view {
+				m.history = nil
+				m.switchTo(v, m.agent)
+			}
+			return m, nil
+		case "a":
+			m.cycleAgent()
+			return m, nil
+		case "d":
+			m.openPicker()
+			return m, nil
 		case "/":
+			if m.focus == focusPreview {
+				return m, m.startFind()
+			}
 			m.filtering = true
-			m.focus = focusTree
 			return m, m.filter.Focus()
 		}
 		if m.focus == focusPreview {
@@ -281,9 +417,9 @@ func (m Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if r, ok := m.row(); ok {
-			if r.Node.Kind == tree.KindItem {
+			if r.Node.Kind == tree.KindItem || !r.Node.HasChildren() {
 				m.focus = focusPreview
-			} else if r.Node.HasChildren() {
+			} else {
 				m.state.Set(r.Node, !r.Expanded)
 				m.refreshRows()
 			}
@@ -292,27 +428,12 @@ func (m Model) updateTree(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.filter.Value() != "" {
 			m.filter.SetValue("")
 			m.refreshRows()
+		} else if m.panel != panelNone {
+			m.panel = panelNone
 		}
 	}
 	m.clampCursor()
 	return m, nil
-}
-
-func (m Model) updatePreview(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "left", "h":
-		m.focus = focusTree
-		return m, nil
-	case "g", "home":
-		m.vp.GotoTop()
-		return m, nil
-	case "G", "end":
-		m.vp.GotoBottom()
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.vp, cmd = m.vp.Update(msg)
-	return m, cmd
 }
 
 func (m Model) row() (tree.Row, bool) {
@@ -347,18 +468,41 @@ const (
 	footerLines = 1
 )
 
+func (m Model) singlePane() bool { return m.width < singlePaneWidth }
+
 func (m Model) treeWidth() int {
+	if m.singlePane() {
+		return m.width
+	}
 	return max(28, min(m.width*2/5, 64))
 }
 
-func (m Model) bodyHeight() int { return max(m.height-headerLines-footerLines, 3) }
+func (m Model) bodyHeight() int {
+	h := m.height - headerLines - footerLines
+	if m.stripVisible() {
+		h -= stripHeight
+	}
+	return max(h, 3)
+}
 func (m Model) treeHeight() int { return m.bodyHeight() - 2 }
 
-func (m Model) previewInnerWidth() int { return max(m.width-m.treeWidth()-2, 10) }
+func (m Model) previewInnerWidth() int {
+	if m.singlePane() {
+		return max(m.width-2, 10)
+	}
+	return max(m.width-m.treeWidth()-2, 10)
+}
+
+// headLines are the breadcrumb and status lines above the document.
+const headLines = 2
+
+func (m *Model) viewportHeight() int {
+	return max(m.treeHeight()-headLines-len(m.metaLines()), 1)
+}
 
 func (m *Model) layout() {
 	m.vp.Width = m.previewInnerWidth()
-	m.vp.Height = max(m.bodyHeight()-2-len(m.metaLines()), 1)
+	m.vp.Height = m.viewportHeight()
 	m.clampCursor()
 }
 
@@ -374,27 +518,47 @@ func (m *Model) togglePanel(p panel) {
 	m.syncPreview()
 }
 
+func (m *Model) previewKey() string {
+	k := fmt.Sprintf("%d|%s|", m.view, m.agent)
+	n := m.selected()
+	switch {
+	case m.panel == panelExplain:
+		k += "panel:explain:"
+		if n != nil {
+			k += n.ID
+		}
+	case m.panel != panelNone:
+		k += "panel:" + string(m.panel)
+	case m.adhoc != nil:
+		k += "adhoc:" + m.adhoc.content.SourcePath
+	case n != nil:
+		k += n.ID
+	default:
+		k += "none"
+	}
+	return k
+}
+
 func (m *Model) syncPreview() {
 	if m.width == 0 {
 		return
 	}
-	id := "none"
-	if m.panel != panelNone {
-		id = "panel:" + string(m.panel)
-	} else if n := m.selected(); n != nil {
-		id = n.ID
-	}
+	id := m.previewKey()
 	if id == m.previewID {
 		return
 	}
 	m.previewID = id
-	m.vp.Height = max(m.bodyHeight()-2-len(m.metaLines()), 1)
+	m.clearFind()
+	m.vp.Width = m.previewInnerWidth()
 	key := fmt.Sprintf("%s|%d|%v", id, m.vp.Width, m.raw)
 	out, ok := m.rendered[key]
 	if !ok {
 		out = m.renderPreview()
 		m.rendered[key] = out
 	}
+	m.cur = out
+	m.computeRefs()
+	m.vp.Height = m.viewportHeight()
 	m.vp.SetContent(out)
 	m.vp.GotoTop()
 }
@@ -410,31 +574,76 @@ func (m *Model) content(it *discovery.Item) preview.Content {
 
 func (m *Model) renderPreview() string {
 	w := m.vp.Width - 1
+	md := func(s string) string {
+		return m.renderer.Render(preview.Content{Text: s, Format: preview.FormatMarkdown}, w, false)
+	}
 	switch m.panel {
 	case panelWarnings:
-		return m.renderer.Render(preview.Content{Text: m.warningsMarkdown(), Format: preview.FormatMarkdown}, w, false)
+		return md(m.warningsMarkdown())
 	case panelBudget:
-		return m.renderer.Render(preview.Content{Text: m.budgetMarkdown(), Format: preview.FormatMarkdown}, w, false)
+		return md(m.budgetMarkdown())
+	case panelExplain:
+		return md(m.explainMarkdown())
+	case panelHelp:
+		return md(helpMarkdown)
+	}
+	if m.adhoc != nil {
+		return m.renderer.Render(m.adhoc.content, w, m.raw)
 	}
 	n := m.selected()
 	if n == nil {
-		return m.renderer.Render(preview.Content{Text: emptyMarkdown, Format: preview.FormatMarkdown}, w, false)
+		return md(emptyMarkdown)
 	}
 	if n.Item == nil {
-		return m.renderer.Render(preview.Content{Text: m.groupMarkdown(n), Format: preview.FormatMarkdown}, w, false)
+		return md(m.groupPreview(n))
 	}
 	return m.renderer.Render(m.content(n.Item), w, m.raw)
 }
 
-// metaLines describe the selected item: path, size, category, scope, agents.
+// groupPreview is the Markdown shown for a group, folder or category node.
+func (m Model) groupPreview(n *tree.Node) string {
+	if n.Kind == tree.KindCategory || n.Kind == tree.KindScope {
+		return m.groupMarkdown(n)
+	}
+	var b strings.Builder
+	b.WriteString("# " + countSuffix.ReplaceAllString(n.Label, "") + "\n\n")
+	if n.Help != "" {
+		b.WriteString(n.Help)
+	} else if n.Kind == tree.KindDir {
+		b.WriteString("A directory.")
+	}
+	if m.view == viewEffective && strings.HasPrefix(n.ID, "e:") {
+		b.WriteString(legendMarkdown())
+		b.WriteString(projectionFooter())
+	} else {
+		b.WriteString(honesty)
+	}
+	return b.String()
+}
+
+// metaLines describe the selected item: path, size and, when the explain
+// strip is hidden, category, scope, agents and startup cost.
 func (m *Model) metaLines() []string {
-	n := m.selected()
-	if m.panel != panelNone || n == nil || n.Item == nil {
+	w := m.previewInnerWidth()
+	var lines []string
+	if c, ok := m.document(); ok {
+		lines = m.docMeta(c, w)
+	}
+	if len(lines) == 0 {
 		return nil
 	}
-	it := n.Item
-	c := m.content(it)
-	w := m.previewInnerWidth()
+	// Leave room for at least three lines of document.
+	room := m.treeHeight() - headLines - 3 - 1
+	if room <= 0 {
+		return nil
+	}
+	if len(lines) > room {
+		lines = lines[:room]
+	}
+	return append(lines, mutedStyle.Render(strings.Repeat("─", w)))
+}
+
+func (m *Model) docMeta(c preview.Content, w int) []string {
 	field := func(label, value string) string {
 		return labelStyle.Render(label) + value
 	}
@@ -443,6 +652,18 @@ func (m *Model) metaLines() []string {
 		return field(label, truncateLeft(m.env.Tilde(p), w-9))
 	}
 	var lines []string
+	if m.adhoc != nil {
+		if c.SourcePath != "" {
+			lines = append(lines, pathField("Path", c.SourcePath))
+		}
+		lines = append(lines, field("File", m.fileDetails(c)))
+		return truncateAll(lines, w)
+	}
+	n := m.selected()
+	if n == nil || n.Item == nil {
+		return nil
+	}
+	it := n.Item
 	path := it.Path
 	if c.SourcePath != "" && c.SourcePath != it.Path {
 		path = c.SourcePath
@@ -456,7 +677,28 @@ func (m *Model) metaLines() []string {
 	for _, a := range it.Aliases {
 		lines = append(lines, pathField("Also at", a))
 	}
+	if it.Info == "" && !it.Missing {
+		lines = append(lines, field("File", m.fileDetails(c)))
+	}
+	if !m.stripVisible() {
+		src := fmt.Sprintf("%s · %s", tree.CategoryLabel(it.Category), scopeStyle(it.Scope).Render(string(it.Scope)))
+		if len(it.Agents) > 0 {
+			src += " · " + strings.Join(it.Agents, ", ")
+		}
+		lines = append(lines, field("Source", src))
+		if en, ok := m.budget.ByID[it.ID]; ok {
+			lines = append(lines, field("Startup", fmt.Sprintf("~%s tokens in context at session start (%s)", budget.Human(en.Tokens), en.How)))
+		} else if it.DeferredForAll() {
+			lines = append(lines, field("Startup", "not loaded at session start"))
+		}
+		if it.Note != "" {
+			lines = append(lines, field("Note", it.Note))
+		}
+	}
+	return truncateAll(lines, w)
+}
 
+func (m *Model) fileDetails(c preview.Content) string {
 	var details []string
 	if c.Size >= 0 {
 		details = append(details, humanSize(c.Size))
@@ -464,32 +706,18 @@ func (m *Model) metaLines() []string {
 	if t := c.Tokens(); t > 0 {
 		details = append(details, fmt.Sprintf("~%s tokens (est.)", humanCount(t)))
 	}
-	if it.Info == "" && !it.Missing {
-		mode := "rendered"
-		if m.raw {
-			mode = "raw"
-		}
-		details = append(details, mode+" view")
-		lines = append(lines, field("File", strings.Join(details, " · ")))
+	mode := "rendered"
+	if m.raw {
+		mode = "raw"
 	}
+	details = append(details, mode+" view")
+	return strings.Join(details, " · ")
+}
 
-	src := fmt.Sprintf("%s · %s", tree.CategoryLabel(it.Category), scopeStyle(it.Scope).Render(string(it.Scope)))
-	if len(it.Agents) > 0 {
-		src += " · " + strings.Join(it.Agents, ", ")
-	}
-	lines = append(lines, field("Source", src))
-	if en, ok := m.budget.ByID[it.ID]; ok {
-		lines = append(lines, field("Startup", fmt.Sprintf("~%s tokens in context at session start (%s)", budget.Human(en.Tokens), en.How)))
-	} else if it.DeferredForAll() {
-		lines = append(lines, field("Startup", "not loaded at session start"))
-	}
-	if it.Note != "" {
-		lines = append(lines, field("Note", it.Note))
-	}
+func truncateAll(lines []string, w int) []string {
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, w, "…")
 	}
-	lines = append(lines, mutedStyle.Render(strings.Repeat("─", w)))
 	return lines
 }
 
@@ -500,62 +728,138 @@ func (m Model) View() string {
 	if m.width == 0 {
 		return ""
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, m.headerView(), m.bodyView(), m.footerView())
+	parts := []string{m.headerView(), m.bodyView()}
+	if m.stripVisible() {
+		parts = append(parts, m.stripView())
+	}
+	parts = append(parts, m.footerView())
+	return fit(lipgloss.JoinVertical(lipgloss.Left, parts...), m.width, m.height)
+}
+
+// fit guarantees exactly height lines, none wider than width.
+func fit(s string, width, height int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for i, l := range lines {
+		if ansi.StringWidth(l) > width {
+			lines[i] = ansi.Truncate(l, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+type headerPart struct {
+	text string
+	drop int // higher drops first; 0 never drops
 }
 
 func (m Model) headerView() string {
 	title := titleStyle.Render("AYCA — All Your Context Are Belong To Us") + "  " + taglineStyle.Render("Know what your agents know.")
-	info := mutedStyle.Render("Project: ") + m.env.Tilde(m.env.ProjectRoot)
-	if m.env.Cwd != m.env.ProjectRoot {
-		info += mutedStyle.Render("  cwd: ") + m.env.Tilde(m.env.Cwd)
+
+	parts := []headerPart{
+		{mutedStyle.Render("Project: ") + m.env.Tilde(m.base.Env.ProjectRoot), 4},
+		{mutedStyle.Render("Agent: ") + accentStyle.Render(explain.AgentName(m.agent)) + mutedStyle.Render(" (a)"), 0},
+		{mutedStyle.Render("View: ") + accentStyle.Render(viewNames[m.view]) + mutedStyle.Render(" (1-4)"), 0},
 	}
-	info += mutedStyle.Render(fmt.Sprintf("  ·  %d items", len(m.res.Items)))
+	wd := mutedStyle.Render("Working dir: ") + m.wdHeader() + mutedStyle.Render(" (d)")
+	if m.atLoading {
+		wd += " " + warnStyle.Render("loading…")
+	}
+	parts = append(parts, headerPart{wd, 1})
 	if s := m.budgetSummary(); s != "" {
-		info += mutedStyle.Render("  ·  startup context on disk: ") + s + mutedStyle.Render(" (c)")
+		parts = append(parts, headerPart{mutedStyle.Render("startup context on disk: ") + s + mutedStyle.Render(" (c)"), 5})
 	}
-	if len(m.agents) > 0 {
-		info += mutedStyle.Render("  ·  agents: " + strings.Join(m.agents, ","))
-	}
-	if n := len(m.res.Warnings); n > 0 {
-		info += "  " + warnStyle.Render(fmt.Sprintf("⚠ %d warning%s (w)", n, plural(n)))
+	if n := len(m.base.Warnings); n > 0 {
+		parts = append(parts, headerPart{warnStyle.Render(fmt.Sprintf("⚠ %d warning%s (w)", n, plural(n))), 2})
 	}
 	if m.scanning {
-		info += mutedStyle.Render("  ·  rescanning…")
+		parts = append(parts, headerPart{mutedStyle.Render("rescanning…"), 0})
+	}
+	const sep = "  ·  "
+	join := func(ps []headerPart) string {
+		var ss []string
+		for _, p := range ps {
+			ss = append(ss, p.text)
+		}
+		return strings.Join(ss, mutedStyle.Render(sep))
+	}
+	info := join(parts)
+	for ansi.StringWidth(info) > m.width {
+		worst := -1
+		for i, p := range parts {
+			if p.drop > 0 && (worst < 0 || p.drop > parts[worst].drop) {
+				worst = i
+			}
+		}
+		if worst < 0 {
+			break
+		}
+		parts = append(parts[:worst], parts[worst+1:]...)
+		info = join(parts)
 	}
 	return ansi.Truncate(title, m.width, "…") + "\n" + ansi.Truncate(info, m.width, "…")
 }
 
 func (m Model) bodyView() string {
-	tw := m.treeWidth()
 	th := m.treeHeight()
-	inner := tw - 2
+	showTree := !m.singlePane() || m.focus == focusTree
+	showPreview := !m.singlePane() || m.focus == focusPreview
 
-	var lines []string
-	end := min(m.offset+th, len(m.rows))
-	for i := m.offset; i < end; i++ {
-		lines = append(lines, m.rowView(m.rows[i], i == m.cursor, inner))
+	var boxes []string
+	if showTree {
+		boxes = append(boxes, m.treeBox(th))
 	}
-	if len(m.rows) == 0 {
-		lines = append(lines, mutedStyle.Render("No matches."))
+	if showPreview {
+		boxes = append(boxes, m.previewBox(th))
 	}
-	treeBox := paneStyle(m.focus == focusTree).Width(inner).Height(th).
-		Render(strings.Join(lines, "\n"))
-
-	pw := m.previewInnerWidth()
-	meta := m.metaLines()
-	content := strings.Join(append(meta, m.vp.View()), "\n")
-	previewBox := paneStyle(m.focus == focusPreview).Width(pw).Height(th).
-		Render(content)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, treeBox, previewBox)
+	return lipgloss.JoinHorizontal(lipgloss.Top, boxes...)
 }
 
-func (m Model) rowView(r tree.Row, selected bool, width int) string {
+func (m Model) treeBox(th int) string {
+	inner := m.treeWidth() - 2
+	var lines []string
+	switch {
+	case m.picker != nil:
+		lines = m.pickerView(inner, th)
+	default:
+		end := min(m.offset+th, len(m.rows))
+		for i := m.offset; i < end; i++ {
+			top := true
+			if p := tree.Parent(m.rows, i); p >= 0 && m.rows[p].Node.Kind == tree.KindItem {
+				top = false
+			}
+			lines = append(lines, m.rowView(m.rows[i], i == m.cursor, inner, top))
+		}
+		if len(m.rows) == 0 {
+			lines = append(lines, mutedStyle.Render("No matches."))
+		}
+	}
+	return paneStyle(m.focus == focusTree).Width(inner).Height(th).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) previewBox(th int) string {
+	pw := m.previewInnerWidth()
+	mm := m
+	head := []string{ansi.Truncate(mm.breadcrumb(pw), pw, "…"), ansi.Truncate(mm.statusLine(pw), pw, "…")}
+	all := append(head, mm.metaLines()...)
+	all = append(all, strings.Split(m.vp.View(), "\n")...)
+	if len(all) > th {
+		all = all[:th]
+	}
+	return paneStyle(m.focus == focusPreview).Width(pw).Height(th).Render(strings.Join(all, "\n"))
+}
+
+func (m Model) rowView(r tree.Row, selected bool, width int, top bool) string {
 	n := r.Node
-	indent := strings.Repeat("  ", min(r.Depth, 2))
+	indent := strings.Repeat("  ", r.Indent)
 	var plain, styled string
 	switch n.Kind {
-	case tree.KindCategory, tree.KindScope:
+	case tree.KindCategory, tree.KindScope, tree.KindGroup:
 		arrow := "▶ "
 		if r.Expanded {
 			arrow = "▼ "
@@ -564,15 +868,39 @@ func (m Model) rowView(r tree.Row, selected bool, width int) string {
 			arrow = "  "
 		}
 		plain = indent + arrow + n.Label
-		if n.Kind == tree.KindCategory {
-			styled = indent + arrow + categoryStyle.Render(n.Label)
-			if !n.HasChildren() {
-				styled = indent + arrow + mutedStyle.Render(n.Label+" — none found")
-				plain += " — none found"
-			}
-		} else {
-			styled = indent + arrow + scopeStyle(n.Scope).Render(n.Label)
+		label := n.Label
+		if !n.HasChildren() {
+			label += " — none found"
+			plain += " — none found"
 		}
+		switch {
+		case !n.HasChildren():
+			styled = indent + arrow + mutedStyle.Render(label)
+		case r.Indent == 0:
+			styled = indent + arrow + categoryStyle.Render(label)
+		case n.Kind == tree.KindScope:
+			styled = indent + arrow + scopeStyle(n.Scope).Render(label)
+		default:
+			styled = indent + arrow + mutedStyle.Render(label)
+		}
+	case tree.KindDir:
+		icon := "▸ "
+		if r.Expanded {
+			icon = "▾ "
+		}
+		if !n.HasChildren() {
+			icon = "▫ "
+		}
+		badge := ""
+		if n.Badge != "" {
+			badge = " " + n.Badge
+		}
+		plain = indent + r.Prefix + icon + n.Label + badge
+		lbl := dirStyle.Render(n.Label)
+		if r.Match {
+			lbl = matchStyle.Render(lbl)
+		}
+		styled = indent + mutedStyle.Render(r.Prefix) + dirStyle.Render(icon) + lbl + mutedStyle.Render(badge)
 	default:
 		it := n.Item
 		icon := "• "
@@ -582,22 +910,29 @@ func (m Model) rowView(r tree.Row, selected bool, width int) string {
 				icon = "▾ "
 			}
 		}
-		badge := ""
-		if r.Depth == 2 && len(it.Agents) > 0 {
-			badge = " " + strings.Join(it.Agents, "·")
+		agentsTag := ""
+		if top && (m.view == viewInventory || m.view == viewFilesystem) && len(it.Agents) > 0 {
+			agentsTag = " " + strings.Join(it.Agents, "·")
 		}
-		if len(it.Aliases) > 0 {
-			badge += fmt.Sprintf(" ⇆%d", len(it.Aliases))
+		alias := ""
+		if len(it.Aliases) > 0 && !strings.Contains(n.Badge, "⇆") {
+			alias = fmt.Sprintf(" ⇆%d", len(it.Aliases))
 		}
+		badge := n.Badge
 		label := n.Label
 		switch {
 		case it.Missing:
 			icon = "✗ "
-			badge = " missing"
+			badge = "missing"
 		case it.Info != "":
 			icon = "◇ "
+		case n.Link:
+			icon = "↪ "
 		}
-		plain = indent + r.Prefix + icon + label + badge
+		if badge != "" {
+			badge = " " + badge
+		}
+		plain = indent + r.Prefix + icon + label + agentsTag + alias + badge
 		lbl := label
 		if r.Match {
 			lbl = matchStyle.Render(label)
@@ -605,7 +940,12 @@ func (m Model) rowView(r tree.Row, selected bool, width int) string {
 		if it.Missing {
 			lbl = warnStyle.Render(label)
 		}
-		styled = indent + mutedStyle.Render(r.Prefix) + scopeStyle(it.Scope).Render(icon) + lbl + mutedStyle.Render(badge)
+		bs := mutedStyle
+		if warnBadge(badge) {
+			bs = warnStyle
+		}
+		styled = indent + mutedStyle.Render(r.Prefix) + scopeStyle(it.Scope).Render(icon) + lbl +
+			mutedStyle.Render(agentsTag+alias) + bs.Render(badge)
 	}
 	if selected {
 		return selectedStyle.Width(width).Render(ansi.Truncate(plain, width, "…"))
@@ -613,19 +953,41 @@ func (m Model) rowView(r tree.Row, selected bool, width int) string {
 	return ansi.Truncate(styled, width, "…")
 }
 
+func warnBadge(b string) bool {
+	b = strings.ToLower(b)
+	for _, w := range []string{"missing", "disabled", "shadowed", "overridden"} {
+		if strings.Contains(b, w) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m Model) footerView() string {
 	if m.filtering {
-		return m.filter.View()
+		return ansi.Truncate(m.filter.View(), m.width, "…")
 	}
-	keys := [][2]string{{"↑↓/jk", "navigate"}, {"←→/hl", "collapse/expand"}, {"enter", "view"}, {"tab", "switch pane"},
-		{"/", "search"}, {"v", "raw/rendered"}, {"c", "context budget"}, {"r", "rescan"}, {"q", "quit"}}
-	if m.focus == focusPreview {
-		keys = [][2]string{{"↑↓/jk", "scroll"}, {"pgup/pgdn", "page"}, {"g/G", "top/bottom"}, {"esc/tab", "back to tree"},
-			{"v", "raw/rendered"}, {"q", "quit"}}
+	if m.finding {
+		s := m.find.View()
+		if st := m.findStatus(); st != "" {
+			s += "  " + warnStyle.Render(st)
+		}
+		return ansi.Truncate(s, m.width, "…")
+	}
+	keys := [][2]string{{"↑↓", "move"}, {"←→", "fold"}, {"enter", "read"}, {"1-4", "view"}, {"a", "agent"},
+		{"d", "dir"}, {"e", "explain"}, {"/", "filter"}, {"?", "help"}, {"q", "quit"}}
+	if m.picker != nil {
+		keys = [][2]string{{"↑↓", "choose"}, {"enter", "select"}, {"esc", "cancel"}}
+	} else if m.focus == focusPreview {
+		keys = [][2]string{{"↑↓", "scroll"}, {"[ ]", "links"}, {"enter", "open"}, {"esc", "back"}, {"/", "find"},
+			{"n/N", "next"}, {"v", "raw"}, {"e", "explain"}, {"?", "help"}}
 	}
 	var parts []string
-	if f := m.filter.Value(); f != "" {
+	if f := m.filter.Value(); f != "" && m.focus == focusTree {
 		parts = append(parts, warnStyle.Render("filter: "+f)+mutedStyle.Render(" (esc clears)"))
+	}
+	if st := m.findStatus(); st != "" && m.focus == focusPreview {
+		parts = append(parts, warnStyle.Render(st))
 	}
 	for _, k := range keys {
 		parts = append(parts, keyStyle.Render(k[0])+" "+mutedStyle.Render(k[1]))
@@ -741,10 +1103,10 @@ _Estimates: tokens ≈ bytes ÷ 4, and only what's on disk. Nested files, shadow
 func (m Model) warningsMarkdown() string {
 	var b strings.Builder
 	b.WriteString("# Discovery warnings\n\nThese locations could not be read. Press `w` to return.\n\n")
-	if len(m.res.Warnings) == 0 {
+	if len(m.base.Warnings) == 0 {
 		b.WriteString("_None._\n")
 	}
-	for _, w := range m.res.Warnings {
+	for _, w := range m.base.Warnings {
 		fmt.Fprintf(&b, "- `%s` — %s\n", m.env.Tilde(w.Path), w.Err)
 	}
 	return b.String()

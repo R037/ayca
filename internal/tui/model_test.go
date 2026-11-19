@@ -13,7 +13,11 @@ import (
 	"github.com/R037/ayca/internal/preview"
 )
 
-func setup(t *testing.T) Model {
+// setup builds a tiny project and opens it in the Inventory view (the
+// layout the original tests were written against).
+func setup(t *testing.T) Model { return setupSize(t, 100, 30) }
+
+func setupSize(t *testing.T, w, h int) Model {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -28,17 +32,18 @@ func setup(t *testing.T) Model {
 	}
 	env := discovery.NewEnvWith(proj, home, func(string) string { return "" })
 	m := New(discovery.Discover(env, nil), nil, nil, preview.NewRendererStyle("dark"))
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	return next.(Model)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	return press(next.(Model), "4")
 }
 
 func press(m Model, keys ...string) Model {
 	for _, k := range keys {
 		var msg tea.KeyMsg
 		switch k {
-		case "down", "up", "left", "right", "enter", "tab", "esc":
+		case "down", "up", "left", "right", "enter", "tab", "esc", "backspace", "pgdown":
 			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"down": tea.KeyDown, "up": tea.KeyUp, "left": tea.KeyLeft,
-				"right": tea.KeyRight, "enter": tea.KeyEnter, "tab": tea.KeyTab, "esc": tea.KeyEsc}[k]}
+				"right": tea.KeyRight, "enter": tea.KeyEnter, "tab": tea.KeyTab, "esc": tea.KeyEsc,
+				"backspace": tea.KeyBackspace, "pgdown": tea.KeyPgDown}[k]}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -138,7 +143,7 @@ func TestBatchedRunesStartSearch(t *testing.T) {
 }
 
 func TestBudgetPanel(t *testing.T) {
-	m := setup(t)
+	m := setupSize(t, 200, 50)
 	if !strings.Contains(ansi.Strip(m.View()), "startup context on disk: claude") {
 		t.Error("header should show the startup context percentage")
 	}
