@@ -239,7 +239,7 @@ func TestFrontmatter(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "x.md")
 	write(t, p, "---\nname: 'demo'\ndescription: >\n  folded line one\n  line two\nglobs:\n  - a\n  - b\n---\nbody\n")
 	fm := frontmatter(p)
-	if fm["name"] != "demo" || fm["description"] != "folded line one line two" || fm["globs"] != "a b" {
+	if fm["name"] != "demo" || fm["description"] != "folded line one line two" || fm["globs"] != "a, b" {
 		t.Errorf("frontmatter = %#v", fm)
 	}
 	if bodyTokens(p) != tokens(len("body\n")) {
@@ -256,5 +256,21 @@ func TestByCategory(t *testing.T) {
 	got := a.ByCategory()
 	if len(got) != 2 || got[0].Category != discovery.CategoryInstruction || got[1].Tokens != 17 || got[1].Count != 2 {
 		t.Errorf("ByCategory = %+v", got)
+	}
+}
+
+func TestSkillDisabledForModelNotCounted(t *testing.T) {
+	res := setup(t, func(home, proj string) {
+		write(t, filepath.Join(home, ".claude", "skills", "manual", "SKILL.md"),
+			"---\nname: manual\ndescription: Only the user can run this.\ndisable-model-invocation: true\n---\n# Manual\n")
+		write(t, filepath.Join(home, ".claude", "skills", "auto", "SKILL.md"),
+			"---\nname: auto\ndescription: The model may use this.\n---\n# Auto\n")
+	})
+	a := agent(t, Estimate(res, nil, nil), discovery.AgentClaude)
+	if _, ok := entry(a, "manual"); ok {
+		t.Error("a skill with disable-model-invocation must not count at startup")
+	}
+	if _, ok := entry(a, "auto"); !ok {
+		t.Error("a normal skill should count its name and description")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	fmatter "github.com/R037/ayca/internal/frontmatter"
 	"io"
 	"os"
 	"path/filepath"
@@ -190,7 +191,12 @@ func (e *estimator) item(it *discovery.Item) {
 		e.files(it, e.rule)
 	case discovery.CategorySkill:
 		if it.IsDir {
-			e.add(it, filepath.Join(it.Path, "SKILL.md"), descTokens(filepath.Join(it.Path, "SKILL.md"), it.Name), HowDescription)
+			skill := filepath.Join(it.Path, "SKILL.md")
+			// A skill only you can invoke is not listed to the model.
+			if strings.EqualFold(frontmatter(skill)["disable-model-invocation"], "true") {
+				return
+			}
+			e.add(it, skill, descTokens(skill, it.Name), HowDescription)
 		}
 	case discovery.CategoryAgent:
 		if e.agent == discovery.AgentClaude {
@@ -202,7 +208,7 @@ func (e *estimator) item(it *discovery.Item) {
 		// typed.
 		if e.agent == discovery.AgentClaude {
 			e.files(it, func(f *discovery.Item) {
-				if fm := frontmatter(f.Path); fm["description"] != "" {
+				if m := frontmatter(f.Path); m["description"] != "" {
 					e.add(f, f.Path, descTokens(f.Path, stem(f.Path)), HowDescription)
 				}
 			})
@@ -343,7 +349,7 @@ func headTokens(path string, n int) int {
 
 // bodyTokens counts a file without its front matter.
 func bodyTokens(path string) int {
-	_, body := split(string(read(path)))
+	_, body := fmatter.ReadFile(path)
 	return tokens(len(body))
 }
 
@@ -359,56 +365,10 @@ func descTokens(path, fallbackName string) int {
 
 func stem(p string) string { return strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)) }
 
-// split separates a leading YAML front matter block from the body.
-func split(s string) (fm, body string) {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	if !strings.HasPrefix(s, "---\n") {
-		return "", s
-	}
-	end := strings.Index(s[4:], "\n---")
-	if end < 0 {
-		return "", s
-	}
-	rest := s[4+end+4:]
-	if i := strings.IndexByte(rest, '\n'); i >= 0 {
-		rest = rest[i+1:]
-	} else {
-		rest = ""
-	}
-	return s[4 : 4+end], rest
-}
-
-// frontmatter reads top-level "key: value" pairs from a file's front
-// matter. Block scalars (| and >) and lists are joined into one string.
-// It's deliberately small: only presence and length matter here.
+// frontmatter reads the top-level front matter fields of a file.
 func frontmatter(path string) map[string]string {
-	fm, _ := split(string(read(path)))
-	out := map[string]string{}
-	var key string
-	for _, line := range strings.Split(fm, "\n") {
-		if line == "" {
-			continue
-		}
-		if line[0] == ' ' || line[0] == '\t' || line[0] == '-' {
-			if key != "" {
-				v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
-				out[key] = strings.TrimSpace(out[key] + " " + v)
-			}
-			continue
-		}
-		k, v, ok := strings.Cut(line, ":")
-		if !ok {
-			key = ""
-			continue
-		}
-		key = strings.TrimSpace(k)
-		v = strings.TrimSpace(v)
-		if v == "|" || v == ">" || v == "|-" || v == ">-" {
-			v = ""
-		}
-		out[key] = strings.Trim(v, `"'`)
-	}
-	return out
+	fields, _ := fmatter.ReadFile(path)
+	return fmatter.Map(fields)
 }
 
 func plural(n int) string {

@@ -67,6 +67,7 @@ type Item struct {
 	Agents   []string // agents known to read this location
 	IsDir    bool
 	Virtual  bool // not a standalone file (e.g. an MCP server inside a config file)
+	Cycle    bool // symlinked directory pointing back at a directory being listed; not followed
 	Missing  bool // referenced (e.g. by an @import) but not found on disk
 	// DeferredFor lists the agents for which this item is not part of a
 	// session's starting context: nested files loaded on demand, shadowed
@@ -79,6 +80,80 @@ type Item struct {
 	// (an MCP server or a hook).
 	Config   map[string]any
 	Children []Item
+	// Found records how each agent finds the item (see Finding).
+	Found []Finding
+}
+
+// Finding records one way an agent finds an item: the path it looks at and
+// the discovery rule involved. A merged item has one Finding per
+// (agent, path, mechanism).
+type Finding struct {
+	Agent      string
+	Path       string
+	Mechanism  Mechanism
+	Provider   string // "plugin:<name>" when contributed by a plugin, else ""
+	Disabled   bool   // the providing plugin is disabled in settings
+	ShadowedBy string // path of a file that takes precedence for this agent (Codex AGENTS.override.md)
+}
+
+// FindingsFor returns the findings of one agent.
+func (it *Item) FindingsFor(agent string) []Finding {
+	var out []Finding
+	for _, f := range it.Found {
+		if f.Agent == agent {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// Provider returns the first non-empty Finding.Provider ("" when none).
+func (it *Item) Provider() string {
+	for _, f := range it.Found {
+		if f.Provider != "" {
+			return f.Provider
+		}
+	}
+	return ""
+}
+
+// DisabledFor reports whether the agent has findings and all are disabled.
+func (it *Item) DisabledFor(agent string) bool {
+	fs := it.FindingsFor(agent)
+	if len(fs) == 0 {
+		return false
+	}
+	for _, f := range fs {
+		if !f.Disabled {
+			return false
+		}
+	}
+	return true
+}
+
+// ShadowedFor returns the path of the file that shadows the item for agent,
+// but only when every finding of that agent is shadowed ("" otherwise).
+func (it *Item) ShadowedFor(agent string) string {
+	fs := it.FindingsFor(agent)
+	if len(fs) == 0 {
+		return ""
+	}
+	for _, f := range fs {
+		if f.ShadowedBy == "" {
+			return ""
+		}
+	}
+	return fs[0].ShadowedBy
+}
+
+// HasMechanism reports whether agent has a finding via mechanism m.
+func (it *Item) HasMechanism(agent string, m Mechanism) bool {
+	for _, f := range it.Found {
+		if f.Agent == agent && f.Mechanism == m {
+			return true
+		}
+	}
+	return false
 }
 
 // Deferred reports whether the item is not loaded at session start by agent.

@@ -156,3 +156,37 @@ func TestEmptyArraysAndDeterminism(t *testing.T) {
 		t.Error("HTML escaped")
 	}
 }
+
+func TestFoundAndLoad(t *testing.T) {
+	res, rep, proj := fixture(t)
+	d := Build(res, rep, "v")
+	if d.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d", d.SchemaVersion)
+	}
+	claude := find(d.Items, func(i Item) bool { return i.Path == filepath.Join(proj, "CLAUDE.md") })
+	if claude == nil {
+		t.Fatal("CLAUDE.md missing")
+	}
+	if len(claude.Found) != 1 || claude.Found[0].Agent != "claude" || claude.Found[0].Mechanism != "dir-instructions" ||
+		claude.Found[0].Path != filepath.Join(proj, "CLAUDE.md") {
+		t.Errorf("found = %+v", claude.Found)
+	}
+	if len(claude.Load) != len(claude.Agents) || claude.Load[0].State != "startup" || claude.Load[0].Confidence != "documented" || claude.Load[0].Reason == "" {
+		t.Errorf("load = %+v", claude.Load)
+	}
+	// Children are classified through their parent chain.
+	imp := find(claude.Children, func(i Item) bool { return filepath.Base(i.Path) == "extra.md" })
+	if imp == nil || len(imp.Load) != 1 || imp.Load[0].State != "startup" || !strings.Contains(imp.Load[0].Reason, "imported into") {
+		t.Fatalf("import load: %+v", imp)
+	}
+	mcp := find(d.Items, func(i Item) bool { return i.Virtual && i.Name == "srv" })
+	if mcp == nil || mcp.Load[0].State != "unknown" || mcp.Load[0].Confidence != "runtime-dependent" {
+		t.Errorf("mcp = %+v", mcp)
+	}
+	raw := string(encode(t, d))
+	for _, k := range []string{`"found": [`, `"load": [`, `"mechanism": "dir-instructions"`, `"state": "startup"`} {
+		if !strings.Contains(raw, k) {
+			t.Errorf("missing %s", k)
+		}
+	}
+}

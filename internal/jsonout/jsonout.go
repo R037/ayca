@@ -10,6 +10,7 @@ import (
 
 	"github.com/R037/ayca/internal/budget"
 	"github.com/R037/ayca/internal/discovery"
+	"github.com/R037/ayca/internal/effective"
 )
 
 // SchemaVersion is bumped on incompatible changes to the document.
@@ -33,6 +34,19 @@ type Project struct {
 }
 
 // Item is one discovered piece of context.
+//
+// The optional "found" and "load" fields were added without changing the
+// schema version (they are purely additive):
+//
+//   - found: one entry per (agent, path, mechanism) that found the item, as
+//     {"agent", "path", "mechanism", "provider"?, "disabled"?, "shadowed_by"?}.
+//     Only top-level items carry findings.
+//   - load: one entry per agent in "agents", classifying how that agent loads
+//     the item (including child items, classified under their parents), as
+//     {"agent", "state", "reason", "confidence"}. State is one of startup,
+//     listed, on-demand, conditional, invocation, event, enforced, disabled,
+//     shadowed, not-loaded, unknown. It documents known agent behaviour and
+//     does not claim what a running session received.
 type Item struct {
 	ID          string         `json:"id"`
 	Name        string         `json:"name"`
@@ -53,6 +67,26 @@ type Item struct {
 	TokensEst   int64          `json:"tokens_est,omitempty"`
 	Startup     []Startup      `json:"startup,omitempty"`
 	Children    []Item         `json:"children,omitempty"`
+	Found       []Found        `json:"found,omitempty"`
+	Load        []Load         `json:"load,omitempty"`
+}
+
+// Found records one way an agent finds an item.
+type Found struct {
+	Agent      string `json:"agent"`
+	Path       string `json:"path"`
+	Mechanism  string `json:"mechanism"`
+	Provider   string `json:"provider,omitempty"`
+	Disabled   bool   `json:"disabled,omitempty"`
+	ShadowedBy string `json:"shadowed_by,omitempty"`
+}
+
+// Load says how one agent loads an item.
+type Load struct {
+	Agent      string `json:"agent"`
+	State      string `json:"state"`
+	Reason     string `json:"reason"`
+	Confidence string `json:"confidence"`
 }
 
 // Startup says how an item counts toward one agent's startup context.
@@ -127,8 +161,9 @@ func Build(res discovery.Result, rep budget.Report, version string) Doc {
 		}
 	}
 
+	ctx := effective.ContextOf(res)
 	for i := range res.Items {
-		d.Items = append(d.Items, buildItem(&res.Items[i], startup))
+		d.Items = append(d.Items, buildItemAt(&res.Items[i], nil, startup, ctx))
 	}
 	for _, a := range rep.Agents {
 		ag := Agent{
@@ -152,6 +187,13 @@ func Build(res discovery.Result, rep budget.Report, version string) Doc {
 }
 
 func buildItem(it *discovery.Item, startup map[string][]Startup) Item {
+	return buildItemAt(it, nil, startup, effective.Context{})
+}
+
+// buildItemAt converts it; parents are its ancestors (outermost first), so
+// children are classified under their parents.
+func buildItemAt(it *discovery.Item, parents []*discovery.Item, startup map[string][]Startup, ctx effective.Context) Item {
+	chain := append(append([]*discovery.Item{}, parents...), it)
 	out := Item{
 		ID: it.ID, Name: it.Name, Path: it.Path, Target: it.Target,
 		Aliases: it.Aliases, Category: string(it.Category), Scope: string(it.Scope),
@@ -169,7 +211,15 @@ func buildItem(it *discovery.Item, startup map[string][]Startup) Item {
 		}
 	}
 	for i := range it.Children {
-		out.Children = append(out.Children, buildItem(&it.Children[i], startup))
+		out.Children = append(out.Children, buildItemAt(&it.Children[i], chain, startup, ctx))
+	}
+	for _, f := range it.Found {
+		out.Found = append(out.Found, Found{Agent: f.Agent, Path: f.Path, Mechanism: string(f.Mechanism),
+			Provider: f.Provider, Disabled: f.Disabled, ShadowedBy: f.ShadowedBy})
+	}
+	for _, a := range it.Agents {
+		l := effective.ClassifyPath(chain, a, ctx)
+		out.Load = append(out.Load, Load{Agent: a, State: string(l.State), Reason: l.Reason, Confidence: string(l.Confidence)})
 	}
 	return out
 }

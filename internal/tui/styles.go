@@ -17,6 +17,7 @@ var (
 	colGlobal   = lipgloss.AdaptiveColor{Light: "#0969DA", Dark: "#79C0FF"}
 	colSystem   = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#FF7B72"}
 	colWarn     = lipgloss.AdaptiveColor{Light: "#BC4C00", Dark: "#FFA657"}
+	colDir      = lipgloss.AdaptiveColor{Light: "#0A6C74", Dark: "#56D4DD"}
 
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 	taglineStyle  = lipgloss.NewStyle().Italic(true).Foreground(colMuted)
@@ -27,6 +28,8 @@ var (
 	keyStyle      = lipgloss.NewStyle().Bold(true)
 	labelStyle    = lipgloss.NewStyle().Foreground(colMuted).Width(9)
 	selectedStyle = lipgloss.NewStyle().Background(colSelBg).Bold(true)
+	dirStyle      = lipgloss.NewStyle().Foreground(colDir)
+	accentStyle   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 )
 
 func scopeColor(s discovery.Scope) lipgloss.AdaptiveColor {

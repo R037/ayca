@@ -60,7 +60,7 @@ func (c *collector) imports(file, parentID string, scope Scope, seen map[string]
 				if !seen["missing:"+p] {
 					seen["missing:"+p] = true
 					out = append(out, Item{ID: id, Name: "@" + tok, Path: p, Category: CategoryInstruction, Scope: scope,
-						Agents: []string{AgentClaude}, Missing: true,
+						Agents: []string{AgentClaude}, Missing: true, Found: importFinding(p),
 						Note: "imported by " + c.env.DisplayPath(file) + " — file not found"})
 				}
 			}
@@ -72,7 +72,7 @@ func (c *collector) imports(file, parentID string, scope Scope, seen map[string]
 		}
 		seen[real] = true
 		child := Item{ID: id, Name: "@" + tok, Path: p, Category: CategoryInstruction, Scope: scope,
-			Agents: []string{AgentClaude}, Note: "imported by " + c.env.DisplayPath(file)}
+			Agents: []string{AgentClaude}, Found: importFinding(p), Note: "imported by " + c.env.DisplayPath(file)}
 		child.Children = c.imports(p, id, scope, seen, depth+1)
 		out = append(out, child)
 	}
@@ -88,4 +88,8 @@ func (c *collector) resolveImportPath(tok, dir string) string {
 	default:
 		return filepath.Join(dir, tok)
 	}
+}
+
+func importFinding(p string) []Finding {
+	return []Finding{{Agent: AgentClaude, Path: p, Mechanism: MechImport}}
 }

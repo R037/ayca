@@ -7,7 +7,11 @@ import (
 
 // info adds an explanatory item for context that exists at runtime but has
 // no file AYCA can read (built-in prompts, account connectors, ...).
-func (c *collector) info(name, markdown string, agents ...string) {
+func (c *collector) info(m Mechanism, name, markdown string, agents ...string) {
+	c.via(m, func() { c.infoItem(name, markdown, agents) })
+}
+
+func (c *collector) infoItem(name, markdown string, agents []string) {
 	c.add(Item{
 		Name:     name,
 		Category: CategoryRuntime,
@@ -24,7 +28,7 @@ func claudeRuntime(c *collector, s claudeSettings, claudeJSON map[string]any) {
 	if s.outputStyle != "" {
 		style = s.outputStyle
 	}
-	c.info("Claude Code system prompt", fmt.Sprintf(`# Claude Code system prompt
+	c.info(MechBuiltinPrompt, "Claude Code system prompt", fmt.Sprintf(`# Claude Code system prompt
 
 Claude Code sends its own system prompt with every request: how to behave, how
 to use tools, and the definitions of every built-in tool plus every connected
@@ -40,7 +44,7 @@ versions, so there's no file to show.
   `+"`-file`"+` variants) replace or extend it for a single run.
 `, style), AgentClaude)
 
-	c.info("Session environment", `# Session environment
+	c.info(MechSessionEnv, "Session environment", `# Session environment
 
 When a session starts, Claude Code adds facts about the environment, such as:
 
@@ -73,9 +77,9 @@ claude.ai → Settings → Connectors.
 			}
 		}
 	}
-	c.info("claude.ai connectors", b.String(), AgentClaude)
+	c.info(MechConnectors, "claude.ai connectors", b.String(), AgentClaude)
 
-	c.info("Launch flags & hook output", `# Launch flags & hook output
+	c.info(MechLaunchFlags, "Launch flags & hook output", `# Launch flags & hook output
 
 Some context is decided each time Claude Code starts, so AYCA can't see it:
 
